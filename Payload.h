@@ -1,5 +1,3 @@
-#define FLAG_OFF 0
-
 /* universal offsets */
 
 /* rcopy */
