@@ -15,7 +15,7 @@
 
 /* macros, if any */
 
-#define DBUG 0
+#define DBUG 1
 
 /* function prototypes */
 

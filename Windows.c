@@ -31,6 +31,7 @@ Window *initWindow(int capacity)
         win->upper = capacity;
         win->pduBuff = (WBuff **)sCalloc(capacity,sizeof(WBuff *));
 
+
         return win;
 }
 
@@ -94,12 +95,25 @@ int addEntry(Window *win, uint8_t *pduBuffer, int pduLength, int seq_num)
        
         int index = getIndex(win,seq_num);
 
+        if(DBUG) printf("Index to add in window = %dn",index);
+
         if(index >= win->capacity)
         {
                 if(DBUG) fprintf(stderr,"%s\n","Index out of bounds!");
-                return 0;
+                return -1;
                 
         }
+
+        if(win->pduBuff[index])
+        {
+                if(win->pduBuff[index]->seq_num != seq_num)
+                {
+                        fprintf(stderr,"Bug with window! Trying to add seq num = %d even though %d is at that spot!\n",seq_num,win->pduBuff[index]->seq_num);
+                        return -1;
+                }
+        }
+        
+        win->pduBuff[index] = (WBuff *)sCalloc(1,sizeof(WBuff));
 
         memcpy(win->pduBuff[index]->savedPDU, pduBuffer, pduLength);
         win->pduBuff[index]->seq_num = seq_num;
@@ -131,15 +145,18 @@ int delEntry(Window *win, int seq_num)
 
 WBuff *getEntry(Window *win, int seq_num)
 {
-        if(!argCheck(win)) return 0;
+        if(!argCheck(win)) return NULL;
         
         int index = getIndex(win,seq_num);
         
         if(index >= win->capacity)
         {
                 if(DBUG) fprintf(stderr,"%s\n","Index out of bounds!");
-                return 0;
+                return NULL;
         }
+
+        if(DBUG) printf("index = %d,pduLength = %d\n",index,win->pduBuff[index]->pduLength);
+
 
         return win->pduBuff[index];
 }

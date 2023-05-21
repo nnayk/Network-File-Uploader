@@ -53,7 +53,7 @@ int setupConnection(int, char *,uint32_t,uint16_t,struct sockaddr_in6 *);
 
 void usePhase(int,int,int,struct sockaddr_in6 *);
 int populatePayload(int, uint8_t *);
-int sendData(int,uint8_t *,int,struct sockaddr_in6 *,uint32_t,uint8_t);
+int sendData(int,uint8_t *,int,uint8_t *,int,struct sockaddr_in6 *,uint32_t,uint8_t);
 
 void processServerMsg(int socket,Window *win,struct sockaddr_in6 *);
 
@@ -274,15 +274,16 @@ int checkArgs(int argc, char * argv[])
 
 void usePhase(int fd, int socket, int windowSize,struct sockaddr_in6 *server)
 {
-        uint8_t pduBuffer[MAXBUF];
-        uint8_t payloadBuffer[MAXPAYLOAD];
+        uint8_t pduBuffer[MAXBUF] = {0};
+        uint8_t payloadBuffer[MAXPAYLOAD] = {0};
         int status = -1;
-        uint32_t seq_num = 0;
-        int bytesRead = 0;
+        int seq_num = 0;
+        int bytesRead = -1;
         int reached_EOF = -1; /* < 0 means not reached EOF, > 0 = seq num of last packet + means reached EOF */
         int flag = F_DATA; /* only changes to F_EOF and F_EOF_ACK_2 at the end of the use phase */ 
         Window *win = NULL;
         int counter = 0;
+        int pduLength = 0;
         
         if(!(win = initWindow(windowSize)))
         {
@@ -291,36 +292,53 @@ void usePhase(int fd, int socket, int windowSize,struct sockaddr_in6 *server)
 
         WBuff *entry = NULL;
         int lowestSeq = 0;
+        int maxRR = -1;
 
         while(status != DONE)
         {
-                while(windowOpen(win))
+                while(windowOpen(win) && bytesRead)
                 {
+                        if(DBUG) printf("WINDOW OPEN, seq num = %d\n",seq_num);
                         if((bytesRead = populatePayload(fd,payloadBuffer)) < MAXPAYLOAD)
                                 reached_EOF = 1;
 
-                        sendData(socket,payloadBuffer,bytesRead,server,seq_num,F_DATA);
-
-                        shiftCurrent(win,1);
-
-                        while(pollCall(0) != TIMEOUT)
+                        if(bytesRead)
                         {
-                                /* process server packet */
-                                processServerMsg(socket,win,server);
-                        }
+                                /* delete this if check later */
+                                if((pduLength = sendData(socket,pduBuffer,-1,payloadBuffer,bytesRead,server,(uint32_t)seq_num,F_DATA)) == -1)
+                                {
+                                        fprintf(stderr,"%s\n","Send data issue");
+                                        return;
+                                }
+
+                                addEntry(win,pduBuffer,pduLength,seq_num);
+
+                                shiftCurrent(win,1);
+
+                                while(pollCall(0) != -1)
+                                {
+                                        /* process server packet */
+                                        processServerMsg(socket,win,server);
+                                }
                         
-                        seq_num++;
+                                seq_num++;
+                        }
                 }
+
+                if(DBUG) printf("EXITED OPEN WINDOW LOOP!\n");
                 
                 counter = 0;
 
-                while(!windowOpen(win))
+                printf("MAXRR = %d, seq_num-1 = %d\n",maxRR,seq_num-1);
+                while(!windowOpen(win) || (maxRR < (seq_num - 1)))
                 {
+                        if(DBUG) printf("WNDOW CLOSED!\n");
                         if(counter == 10) return; /* failed to get a server response after 10 transmission attempts, quit*/
                         
                         /* received a message from server */
-                        if(pollCall(1000) != TIMEOUT)
+                        if(pollCall(1000) != -1)
                         {
+                                if(DBUG) printf("POLL READY!\n");
                                 processServerMsg(socket,win,server);
                         }
 
@@ -328,13 +346,14 @@ void usePhase(int fd, int socket, int windowSize,struct sockaddr_in6 *server)
                         else
                         {
                                 lowestSeq = getLower(win);
-                                if(!(entry = getEntry(win,lowestSeq)))
+                                if(DBUG) printf("lowest seq num = %d\n",lowestSeq);
+                                if((entry = getEntry(win,lowestSeq)) == -1)
                                 {
                                         fprintf(stderr,"%s\n","getEntry");
                                         exit(3);
                                 }
 
-                                sendData(socket,entry->savedPDU,entry->pduLength,server,lowestSeq,F_DATA);
+                                sendData(socket,entry->savedPDU,entry->pduLength,NULL,0,server,lowestSeq,F_DATA);
                         }
 
                         counter++;
@@ -344,7 +363,7 @@ void usePhase(int fd, int socket, int windowSize,struct sockaddr_in6 *server)
                 if(reached_EOF)
                 {
                         if(DBUG) printf("REACHED EOF\n");
-                        sendData(socket,NULL,0,server,0,F_EOF);
+                        sendData(socket,pduBuffer,HDR_LEN,payloadBuffer,0,server,0,F_EOF);
                 }
         }
 }
@@ -363,23 +382,16 @@ int populatePayload(int fd, uint8_t *payload)
         return bytesRead;
 }
 
-int sendData(int socket, uint8_t *payload,int payloadLength, struct sockaddr_in6 *server,uint32_t seq_num, uint8_t flag)
+int sendData(int socket, uint8_t *pduBuffer,int pduLength,uint8_t *payload,int payloadLength, struct sockaddr_in6 *server,uint32_t seq_num, uint8_t flag)
 {
-        if(!payload)
-        {
-                if(DBUG) fprintf(stderr,"%s\n","Given null payload!");
-                return 0;
-        }
 
-        uint8_t pduBuffer[MAXBUF] = {0};
-
-        int pduLength = createPDU(pduBuffer,seq_num,flag,payload,payloadLength);
+        if(pduLength == -1) pduLength = createPDU(pduBuffer,seq_num,flag,payload,payloadLength);
 
         if(DBUG) printf("PDU length = %d\n",pduLength);
         
         safeSendto(socket, pduBuffer, pduLength, 0, (struct sockaddr *) server, sizeof(struct sockaddr_in6));
 
-        return 1;
+        return pduLength;
 }
 
 void processServerMsg(int socket, Window *win, struct sockaddr_in6 *server)
