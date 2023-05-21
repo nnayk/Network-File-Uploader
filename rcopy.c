@@ -51,13 +51,13 @@ int checkArgs(int argc, char * argv[]);
 
 int setupConnection(int, char *,uint32_t,uint16_t,struct sockaddr_in6 *);
 
-void usePhase(int,int,int,struct sockaddr_in6 *);
-int populatePayload(int, uint8_t *);
+void usePhase(int,int,int,int,struct sockaddr_in6 *);
+int populatePayload(int, uint8_t *,int);
 int sendData(int,uint8_t *,int,uint8_t *,int,struct sockaddr_in6 *,uint32_t,uint8_t);
 
-int processServerMsg(int socket,Window *win,struct sockaddr_in6 *,uint8_t *);
+int processServerMsg(int socket,Window *win,struct sockaddr_in6 *,uint8_t *,int *);
 
-void handle_rr(int,Window *,uint8_t *);
+void handle_rr(int,Window *,uint8_t *,int *);
 void handle_srej(int,Window *,uint8_t *,struct sockaddr_in6 *);
 
 int main (int argc, char *argv[])
@@ -136,7 +136,7 @@ int main (int argc, char *argv[])
         }
 
         /* use phase */
-        usePhase(fd,socketNum,windowSize,&server);
+        usePhase(fd,socketNum,windowSize,bufferSize,&server);
 
 	
         /*talkToServer(socketNum, &server);*/
@@ -275,7 +275,7 @@ int checkArgs(int argc, char * argv[])
 	return portNumber;
 }
 
-void usePhase(int fd, int socket, int windowSize,struct sockaddr_in6 *server)
+void usePhase(int fd, int socket, int windowSize,int bufferSize,struct sockaddr_in6 *server)
 {
         uint8_t pduBuffer[MAXBUF] = {0};
         uint8_t serverPDU[MAXBUF] = {0};
@@ -302,30 +302,31 @@ void usePhase(int fd, int socket, int windowSize,struct sockaddr_in6 *server)
         {
                 while(windowOpen(win) && bytesRead)
                 {
-                        if(DBUG) printf("WINDOW OPEN, seq num = %d\n",seq_num);
-                        if((bytesRead = populatePayload(fd,payloadBuffer)) < MAXPAYLOAD)
+                        if(DBUG) printf("WINDOW OPEN, seq num = %d\n",getCurrent(win));
+                        if((bytesRead = populatePayload(fd,payloadBuffer,bufferSize)) < bufferSize)
                                 reached_EOF = 1;
 
                         if(bytesRead)
                         {
                                 /* delete this if check later */
-                                if((pduLength = sendData(socket,pduBuffer,-1,payloadBuffer,bytesRead,server,(uint32_t)seq_num,F_DATA)) == -1)
+                                if((pduLength = sendData(socket,pduBuffer,-1,payloadBuffer,bytesRead,server,(uint32_t)getCurrent(win),F_DATA)) == -1)
                                 {
                                         fprintf(stderr,"%s\n","Send data issue");
                                         return;
                                 }
 
-                                addEntry(win,pduBuffer,pduLength,seq_num);
+                                if(DBUG) printf("SENT %d bytes!, seq num = %d\n",pduLength,getCurrent(win));
 
+                                addEntry(win,pduBuffer,pduLength,getCurrent(win));
+                                /* following line has to be after addEntry() b/c we're useing win.current above */
                                 shiftCurrent(win,1);
 
                                 while(pollCall(0) != -1)
                                 {
                                         /* process server packet */
-                                        serverFlag = processServerMsg(socket,win,server,serverPDU);
+                                        printf("GOT A MSG!\n");
+                                        serverFlag = processServerMsg(socket,win,server,serverPDU,&maxRR);
                                 }
-                        
-                                seq_num++;
                         }
                 }
 
@@ -334,7 +335,7 @@ void usePhase(int fd, int socket, int windowSize,struct sockaddr_in6 *server)
                 counter = 0;
 
                 printf("MAXRR = %d, seq_num-1 = %d\n",maxRR,seq_num-1);
-                while(!windowOpen(win) || (maxRR < (seq_num - 1)))
+                while(!windowOpen(win) || (maxRR < (getCurrent(win) - 1)))
                 {
                         if(DBUG) printf("WNDOW CLOSED!\n");
                         if(counter == 10) return; /* failed to get a server response after 10 transmission attempts, quit*/
@@ -343,7 +344,7 @@ void usePhase(int fd, int socket, int windowSize,struct sockaddr_in6 *server)
                         if(pollCall(1000) != -1)
                         {
                                 if(DBUG) printf("POLL READY!\n");
-                                serverFlag = processServerMsg(socket,win,server,serverPDU);
+                                serverFlag = processServerMsg(socket,win,server,serverPDU,&maxRR);
                         }
 
                         /* else, resort to sending lowest packet */
@@ -372,11 +373,11 @@ void usePhase(int fd, int socket, int windowSize,struct sockaddr_in6 *server)
         }
 }
 
-int populatePayload(int fd, uint8_t *payload)
+int populatePayload(int fd, uint8_t *payload,int bufferSize)
 {
         int bytesRead = 0;
 
-        if((bytesRead = read(fd,payload,MAXPAYLOAD)) == -1)
+        if((bytesRead = read(fd,payload,bufferSize)) == -1)
         {
                 perror("read");
                 exit(3);
@@ -398,7 +399,7 @@ int sendData(int socket, uint8_t *pduBuffer,int pduLength,uint8_t *payload,int p
         return pduLength;
 }
 
-int processServerMsg(int socket, Window *win, struct sockaddr_in6 *server, uint8_t *serverPDU)
+int processServerMsg(int socket, Window *win, struct sockaddr_in6 *server, uint8_t *serverPDU,int *max_rr)
 {
         int serverAddrLen = sizeof(struct sockaddr_in6);
         int flag = -1;
@@ -414,7 +415,7 @@ int processServerMsg(int socket, Window *win, struct sockaddr_in6 *server, uint8
         /* received RR from server */
         if(flag == F_RR)
         {
-                handle_rr(socket,win,serverPDU);
+                handle_rr(socket,win,serverPDU,max_rr);
         }
         /* received SREJ from server */
         else
@@ -425,10 +426,15 @@ int processServerMsg(int socket, Window *win, struct sockaddr_in6 *server, uint8
         return flag;
 }
 
-void handle_rr(int socket,Window * win,uint8_t *serverPDU)
+void handle_rr(int socket,Window * win,uint8_t *serverPDU,int *maxRR)
 {
         int rr_num = serverPDU[PAYLOAD_OFF];
         int offset = rr_num - getLower(win);
+
+        if(rr_num > *maxRR)
+        {
+                *maxRR = rr_num;
+        }
 
         if(offset) slideWindow(win,offset);
 }

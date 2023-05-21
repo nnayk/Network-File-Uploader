@@ -2,6 +2,7 @@
 
 
 #define HDR_LEN 7
+#define SEQ_OFF 0
 #define CRC_OFF 4
 #define FLAG_OFF 6
 #define PAYLOAD_OFF 7

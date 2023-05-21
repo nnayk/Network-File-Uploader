@@ -26,7 +26,9 @@ int safeRecvfrom(int socketNum, void * buf, int len, int flags, struct sockaddr 
 		exit(-1);
 	}
 
-        if(in_cksum((unsigned short *)buf,returnValue) != 0)
+        printf("READ %d bytes\n",returnValue);
+
+        if((in_cksum((unsigned short *)buf,returnValue)))
         {
                 return CRC_ERR;
         }
