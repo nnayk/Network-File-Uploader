@@ -55,7 +55,10 @@ void usePhase(int,int,int,struct sockaddr_in6 *);
 int populatePayload(int, uint8_t *);
 int sendData(int,uint8_t *,int,uint8_t *,int,struct sockaddr_in6 *,uint32_t,uint8_t);
 
-void processServerMsg(int socket,Window *win,struct sockaddr_in6 *);
+int processServerMsg(int socket,Window *win,struct sockaddr_in6 *,uint8_t *);
+
+void handle_rr(int,Window *,uint8_t *);
+void handle_srej(int,Window *,uint8_t *,struct sockaddr_in6 *);
 
 int main (int argc, char *argv[])
  {
@@ -275,15 +278,16 @@ int checkArgs(int argc, char * argv[])
 void usePhase(int fd, int socket, int windowSize,struct sockaddr_in6 *server)
 {
         uint8_t pduBuffer[MAXBUF] = {0};
+        uint8_t serverPDU[MAXBUF] = {0};
         uint8_t payloadBuffer[MAXPAYLOAD] = {0};
         int status = -1;
         int seq_num = 0;
         int bytesRead = -1;
         int reached_EOF = -1; /* < 0 means not reached EOF, > 0 = seq num of last packet + means reached EOF */
-        int flag = F_DATA; /* only changes to F_EOF and F_EOF_ACK_2 at the end of the use phase */ 
         Window *win = NULL;
         int counter = 0;
         int pduLength = 0;
+        int serverFlag = -1;
         
         if(!(win = initWindow(windowSize)))
         {
@@ -318,7 +322,7 @@ void usePhase(int fd, int socket, int windowSize,struct sockaddr_in6 *server)
                                 while(pollCall(0) != -1)
                                 {
                                         /* process server packet */
-                                        processServerMsg(socket,win,server);
+                                        serverFlag = processServerMsg(socket,win,server,serverPDU);
                                 }
                         
                                 seq_num++;
@@ -339,7 +343,7 @@ void usePhase(int fd, int socket, int windowSize,struct sockaddr_in6 *server)
                         if(pollCall(1000) != -1)
                         {
                                 if(DBUG) printf("POLL READY!\n");
-                                processServerMsg(socket,win,server);
+                                serverFlag = processServerMsg(socket,win,server,serverPDU);
                         }
 
                         /* else, resort to sending lowest packet */
@@ -347,7 +351,7 @@ void usePhase(int fd, int socket, int windowSize,struct sockaddr_in6 *server)
                         {
                                 lowestSeq = getLower(win);
                                 if(DBUG) printf("lowest seq num = %d\n",lowestSeq);
-                                if((entry = getEntry(win,lowestSeq)) == -1)
+                                if(!(entry = getEntry(win,lowestSeq)))
                                 {
                                         fprintf(stderr,"%s\n","getEntry");
                                         exit(3);
@@ -394,18 +398,45 @@ int sendData(int socket, uint8_t *pduBuffer,int pduLength,uint8_t *payload,int p
         return pduLength;
 }
 
-void processServerMsg(int socket, Window *win, struct sockaddr_in6 *server)
+int processServerMsg(int socket, Window *win, struct sockaddr_in6 *server, uint8_t *serverPDU)
 {
         int serverAddrLen = sizeof(struct sockaddr_in6);
         int flag = -1;
-        uint8_t responseBuffer[MAXBUF] = {0};
 
-        if(safeRecvfrom(socket,responseBuffer,MAXBUF,0,(struct sockaddr *)server,&serverAddrLen) == CRC_ERR)
+        if(safeRecvfrom(socket,serverPDU,MAXBUF,0,(struct sockaddr *)server,&serverAddrLen) == CRC_ERR)
         {
                 if(DBUG) printf("CRC err\n");
-                return; /* pretend like we didn't receive a packet if there's a CRC error */
+                return -1; /* pretend like we didn't receive a packet if there's a CRC error */
         }
  
-        flag = responseBuffer[FLAG_OFF];
+        flag = serverPDU[FLAG_OFF];
+        
+        /* received RR from server */
+        if(flag == F_RR)
+        {
+                handle_rr(socket,win,serverPDU);
+        }
+        /* received SREJ from server */
+        else
+        {
+                handle_srej(socket,win,serverPDU,server);
+        }
+
+        return flag;
 }
 
+void handle_rr(int socket,Window * win,uint8_t *serverPDU)
+{
+        int rr_num = serverPDU[PAYLOAD_OFF];
+        int offset = rr_num - getLower(win);
+
+        if(offset) slideWindow(win,offset);
+}
+
+void handle_srej(int socket,Window * win,uint8_t *serverPDU, struct sockaddr_in6 *server)
+{
+        int srej_num = serverPDU[PAYLOAD_OFF];
+        WBuff *entry = getEntry(win,srej_num);
+
+        sendData(socket,entry->savedPDU,entry->pduLength,NULL,0,server,srej_num,F_DATA);
+}

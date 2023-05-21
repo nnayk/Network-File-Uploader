@@ -16,13 +16,12 @@
 #define DBUG 1
 
 /* function prototypes */
-int argCheck(Window *);
+Window *argCheck(Window *);
 
 /* global vars, if any */
 
 Window *initWindow(int capacity)
 {
-        int i;
         Window *win = sCalloc(1,sizeof(Window)); /* switch to malloc */
         win->capacity = capacity;
         win->numItems = 0;
@@ -60,9 +59,6 @@ int slideWindow(Window *win, int offset)
 {
         int i;
         int newLower = win->lower + offset;
-
-        win->lower += offset;
-        win->upper += offset;
 
         for(i=win->lower;i<newLower;i++)
         {
@@ -188,7 +184,7 @@ int windowOpen(Window *win)
         return 0;
 }
 
-int argCheck(Window *win)
+Window *argCheck(Window *win)
 {
         return win;
 }
