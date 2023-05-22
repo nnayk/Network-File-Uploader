@@ -33,7 +33,8 @@ void send_file_response(Endpoint,uint8_t);
 void serverUsePhase(int,Endpoint *,uint32_t,uint16_t);
 int processClientMsg(int,Endpoint *,Window *,uint8_t *,uint32_t *,uint32_t *,int);
 void handle_data(Endpoint *,Window *,uint8_t *,int,uint32_t *,uint32_t *,int);
-void send_RR(Endpoint *,uint32_t);
+void send_rr(Endpoint *,uint32_t);
+void send_srej(Endpoint *,uint32_t);
 int handle_eof(Endpoint *,uint32_t *,uint32_t *);
 
 int main ( int argc, char *argv[]  )
@@ -273,8 +274,11 @@ int processClientMsg(int fd,Endpoint *conn,Window *circBuff,uint8_t *clientPDU,u
 
 void handle_data(Endpoint *conn,Window *circBuff,uint8_t *dataPDU,int pduLength,uint32_t *expRR,uint32_t *maxRR,int fd)
 {
-        uint32_t network_seq_num = -1;
-        uint32_t host_seq_num = -1;
+        uint32_t network_seq_num = 0;
+        uint32_t host_seq_num = 0;
+        static uint8_t sent_srej = 0;
+        int i; /* loop var */
+        WBuff *entry = NULL;
 
         memcpy(&network_seq_num,dataPDU+SEQ_OFF,SEQ_NUM_SIZE);
 
@@ -292,6 +296,7 @@ void handle_data(Endpoint *conn,Window *circBuff,uint8_t *dataPDU,int pduLength,
                 {
                         
                         *maxRR = host_seq_num;
+                        printf("BEFORE expr = %d\n",*expRR);
                         *(expRR) = *(expRR) + 1;
                         printf("NEW EXPRR = %d\n",*expRR);
                         if(write(fd,dataPDU+PAYLOAD_OFF,payloadLength)==-1)
@@ -300,15 +305,68 @@ void handle_data(Endpoint *conn,Window *circBuff,uint8_t *dataPDU,int pduLength,
                                 exit(EXIT_FAILURE);
                         }
                 }
+                
                 /* received a packet that was previously lost and resent by client */
                 else
                 {
-                        *expRR = *maxRR + 1;
+                        addEntry(circBuff,dataPDU,pduLength,*expRR);
+                        for(i=*expRR;i<=(*maxRR);i++)
+                        {
+                                /* already buffered a packet, write it to the file and increment expected rr */
+                                if(existsEntry(circBuff,i)) 
+                                {
+                                        printf("i=%d exists!\n",i);
+                                        entry = getEntry(circBuff,i);
+                                        if(write(fd,entry->savedPDU+PAYLOAD_OFF,entry->pduLength-HDR_LEN)==-1)
+                                        {
+                                                perror("write");
+                                                exit(EXIT_FAILURE);
+                                        }
+                                        delEntry(circBuff,i); 
+                                        *expRR = (*expRR) + 1;
+                                }
+                                
+                                /* missing packet, set expected rr to seq num of missing packet,send rr and srej, and exit the loop */
+                                else 
+                                {
+                                        printf("i=%d dne!\n",i);
+                                        *expRR = i;
+                                        /*send_rr(conn,*expRR);*/
+                                        send_srej(conn,*expRR);
+                                        sent_srej = 1;
+                                        break;
+                                }
+                        }
+                        
+                        if((*expRR) == *maxRR)
+                        {
+                                *expRR = (*expRR) + 1;
+                                sent_srej = 0;
+                        }
                 }
                 
-                send_RR(conn,*expRR);
+                printf("GOT EXPECTED RR = %d\n",*expRR);
+                send_rr(conn,*expRR);
         }
         /* loss case: buffer data and possibly send SREJ */
+        else if(host_seq_num > *expRR)
+        {
+                printf("GOT %d, expected %d\n",host_seq_num,*expRR);
+                /* save the given packet */
+                addEntry(circBuff,dataPDU,pduLength,host_seq_num); 
+                /* send srej if not already done so for the window */
+                if(!sent_srej) 
+                {
+                        send_srej(conn,*expRR);
+                        sent_srej = 1;
+                }
+        }
+        /* previous RR was lost, just resend it to please the client */
+        else
+        {
+                printf("GOT LOWER RR = %d, expected = %d\n",host_seq_num,*expRR);
+                send_rr(conn,host_seq_num+1);
+        }
 }
 
 int handle_eof(Endpoint *conn,uint32_t *expRR,uint32_t *maxRR)
@@ -331,18 +389,27 @@ int handle_eof(Endpoint *conn,uint32_t *expRR,uint32_t *maxRR)
         return reallyDone;
 }
 
-void send_RR(Endpoint *conn,uint32_t rr_num)
+void send_rr(Endpoint *conn,uint32_t rr_num)
 {
         uint8_t pduBuffer[MAXBUF] = {0};
         int pduLength = -1;
         uint32_t net_rr_num = htonl(rr_num);
 
-
+        /* delete these 3 lines later */
         uint8_t rr[4];
         memcpy(rr,(uint8_t *)&rr_num,4);
         printf("SENDING RR %d vs %d\n",rr_num,*(uint32_t *)rr);
-
+        
         pduLength = createPDU(pduBuffer,0,F_RR,(uint8_t *)&net_rr_num,4);
+        safeSendto(conn->socket,pduBuffer,pduLength,0,(struct sockaddr *)&conn->addr,sizeof(struct sockaddr_in6));
+}
 
+void send_srej(Endpoint *conn,uint32_t seq_num)
+{
+        uint8_t pduBuffer[MAXBUF] = {0};
+        int pduLength = -1;
+        uint32_t net_seq_num = htonl(seq_num);
+        
+        pduLength = createPDU(pduBuffer,0,F_SREJ,(uint8_t *)&net_seq_num,4);
         safeSendto(conn->socket,pduBuffer,pduLength,0,(struct sockaddr *)&conn->addr,sizeof(struct sockaddr_in6));
 }

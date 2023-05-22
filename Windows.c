@@ -169,6 +169,15 @@ WBuff *getEntry(Window *win, int seq_num)
         return win->pduBuff[index];
 }
 
+int existsEntry(Window *win,int seq_num)
+{
+        WBuff *entry = getEntry(win,seq_num);
+
+        if(!entry || !entry->filled) return 0;
+
+        return 1;
+}
+
 WBuff *getSavedPDU(Window *win, int index)
 {
         if(!win->pduBuff[index])

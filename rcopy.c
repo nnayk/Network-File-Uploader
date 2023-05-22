@@ -352,17 +352,22 @@ void usePhase(int fd, int socket, int windowSize,int bufferSize,struct sockaddr_
 
                 printf("MAXRR = %d, seq_num-1 = %d\n",maxRR,getCurrent(win)-1);
                 printf("AFTER FIRST LOOP Lower = %d, curr = %d, upper = %d, numItems = %d\n",getLower(win),getCurrent(win),getUpper(win),getNumItems(win));
-                while(!windowOpen(win) || (maxRR < (getCurrent(win))))
+                while(!windowOpen(win) || ((maxRR < (getCurrent(win))) && !bytesRead))
                 {
-                        printf("2nd LOOP!\n");
-                        if(DBUG) printf("WNDOW CLOSED!\n");
-                        if(counter == 10) return; /* failed to get a server response after 10 transmission attempts, quit*/
+                        printf("2nd LOOP! counter = %d\n",counter);
+                        if(DBUG) printf("WNDOW CLOSED!,maxRR = %d, current = %d\n",maxRR,getCurrent(win));
+                        if(counter == 10) 
+                        {
+                                printf("Counter timed out!\n");
+                                return; /* failed to get a server response after 10 transmission attempts, quit*/
+                        }
                         
                         /* received a message from server */
                         if(pollCall(1000) != -1)
                         {
                                 if(DBUG) printf("POLL READY!\n");
                                 serverFlag = processServerMsg(socket,win,server,serverPDU,&maxRR);
+                                counter = 0;
                         }
 
                         /* else, resort to sending lowest packet */
@@ -377,9 +382,9 @@ void usePhase(int fd, int socket, int windowSize,int bufferSize,struct sockaddr_
                                 }
 
                                 sendData(socket,entry->savedPDU,entry->pduLength,NULL,0,server,lowestSeq,F_DATA);
+                                counter++;
                         }
 
-                        counter++;
                 }
 
                 /* send eof packet -- but do NOT exit loop until server sends rr for last packet */
@@ -398,6 +403,8 @@ void usePhase(int fd, int socket, int windowSize,int bufferSize,struct sockaddr_
                         eof_counter++;
                 }
         }
+
+        printf("STATUS = %d, DONE = %d\n",status,DONE);
         
         freeWindow(win);
 }
@@ -444,11 +451,13 @@ int processServerMsg(int socket, Window *win, struct sockaddr_in6 *server, uint8
         /* received RR from server */
         if(flag == F_RR)
         {
+                printf("RECEVED RR!\n");
                 handle_rr(socket,win,serverPDU,max_rr);
         }
         /* received SREJ from server */
         else if(flag == F_SREJ)
         {
+                printf("RECEVED SREJ!\n");
                 handle_srej(socket,win,serverPDU,server);
         }
         /* received EOF ACK from server */
@@ -470,20 +479,29 @@ void handle_rr(int socket,Window * win,uint8_t *serverPDU,uint32_t *maxRR)
 
         int offset = host_rr_num - getLower(win);
 
+        printf("PRE RECVED RR = %d, lower = %d, offset = %d\n",host_rr_num,getLower(win),offset);
+
         if(host_rr_num > *maxRR)
         {
                 *maxRR = host_rr_num;
         }
 
         if(offset) slideWindow(win,offset);
+        printf("POST RECVED RR = %d, lower = %d, offset = %d\n",host_rr_num,getLower(win),offset);
 }
 
 void handle_srej(int socket,Window * win,uint8_t *serverPDU, struct sockaddr_in6 *server)
 {
-        int srej_num = serverPDU[PAYLOAD_OFF];
-        WBuff *entry = getEntry(win,srej_num);
+        uint32_t net_srej_num = 0;
+        uint32_t host_srej_num = 0;
+        memcpy(&net_srej_num,serverPDU + PAYLOAD_OFF,4);
+        host_srej_num = ntohl(net_srej_num);
+        
+        printf("SREJ = %d\n",host_srej_num);
+        WBuff *entry = getEntry(win,host_srej_num);
 
-        sendData(socket,entry->savedPDU,entry->pduLength,NULL,0,server,srej_num,F_DATA);
+        sendData(socket,entry->savedPDU,entry->pduLength,NULL,0,server,host_srej_num,F_DATA);
+        if(DBUG) printf("SREJ: SENT %d bytes!, seq num = %d\n",entry->pduLength,entry->seq_num);
 }
 
 void handle_eof_ack(int socket,struct sockaddr_in6 *server)

@@ -38,3 +38,4 @@ int shiftCurrent(Window *,int);
 int addEntry(Window *,uint8_t *,int,int);
 int delEntry(Window *,int);
 WBuff *getEntry(Window *, int);
+int existsEntry(Window *,int);
