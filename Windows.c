@@ -11,6 +11,7 @@
 
 #include "Windows.h"
 #include "safeUtil.h"
+#include "cpe464.h"
 
 /* macros, if any */
 #define DBUG 1
@@ -63,7 +64,6 @@ int slideWindow(Window *win, int offset)
         for(i=win->lower;i<newLower;i++)
         {
                 delEntry(win,i);
-                win->numItems--;
         }
 
         win->lower += offset;
@@ -100,7 +100,7 @@ int addEntry(Window *win, uint8_t *pduBuffer, int pduLength, int seq_num)
                 
         }
 
-        if(win->pduBuff[index])
+        if(win->pduBuff[index] && win->pduBuff[index]->filled)
         {
                 if(win->pduBuff[index]->seq_num != seq_num)
                 {
@@ -114,6 +114,14 @@ int addEntry(Window *win, uint8_t *pduBuffer, int pduLength, int seq_num)
         memcpy(win->pduBuff[index]->savedPDU, pduBuffer, pduLength);
         win->pduBuff[index]->seq_num = seq_num;
         win->pduBuff[index]->pduLength = pduLength;
+        win->pduBuff[index]->filled = 1;
+
+
+        if(in_cksum((unsigned short *)pduBuffer,pduLength))
+                fprintf(stderr,"%s","HUHHHHHHH? CHECKSUM MI\n");
+        if(in_cksum((unsigned short *)win->pduBuff[index]->savedPDU,win->pduBuff[index]->pduLength))
+                fprintf(stderr,"%s","CHECKSUM MISAMTCH IN WINDOWS!!!\n");
+
 
         win->numItems++;
 
@@ -132,7 +140,11 @@ int delEntry(Window *win, int seq_num)
                 return 0;
         }
 
-        memset(win->pduBuff[index]->savedPDU, 0, MAX_PDU);
+        win->pduBuff[index]->filled = 0;
+        win->pduBuff[index]->pduLength = -1;
+        win->pduBuff[index]->seq_num = 0;
+
+
         
         win->numItems--;
         
@@ -187,4 +199,16 @@ int windowOpen(Window *win)
 Window *argCheck(Window *win)
 {
         return win;
+}
+
+void freeWindow(Window *win)
+{
+        int i;
+
+        for(i=0;i<win->capacity;i++)
+        {
+                if(win->pduBuff[i]) free(win->pduBuff[i]);
+        }
+
+        free(win);
 }

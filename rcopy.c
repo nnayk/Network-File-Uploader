@@ -55,10 +55,11 @@ void usePhase(int,int,int,int,struct sockaddr_in6 *);
 int populatePayload(int, uint8_t *,int);
 int sendData(int,uint8_t *,int,uint8_t *,int,struct sockaddr_in6 *,uint32_t,uint8_t);
 
-int processServerMsg(int socket,Window *win,struct sockaddr_in6 *,uint8_t *,int *);
+int processServerMsg(int socket,Window *win,struct sockaddr_in6 *,uint8_t *,uint32_t *);
 
-void handle_rr(int,Window *,uint8_t *,int *);
+void handle_rr(int,Window *,uint8_t *,uint32_t *);
 void handle_srej(int,Window *,uint8_t *,struct sockaddr_in6 *);
+void handle_eof_ack(int,struct sockaddr_in6 *);
 
 int main (int argc, char *argv[])
  {
@@ -129,9 +130,14 @@ int main (int argc, char *argv[])
                 counter++;
         }
 
-        if(status == TIMEOUT)
+        if(status == FILE_BAD)
         {
                 fprintf(stderr,"%s\n","Server cannot write to given output file.");
+                exit(EXIT_FAILURE);
+        }
+        else if(status == TIMEOUT)
+        {
+                fprintf(stderr,"%s\n","Timed out.");
                 exit(EXIT_FAILURE);
         }
 
@@ -141,7 +147,10 @@ int main (int argc, char *argv[])
 	
         /*talkToServer(socketNum, &server);*/
 	
-	close(socketNum);
+	/* teardown */
+        printf("CLIENT TEARDOWN!\n");
+        close(fd);
+        close(socketNum);
 
 	return 0;
 }
@@ -188,12 +197,12 @@ int setupConnection(int socketNum,char *toFile, uint32_t windowSize, uint16_t bu
                         if(responseBuffer[PAYLOAD_OFF + FILE_STATUS_OFF] == FILE_OK)
                         {
                                 if(DBUG) printf("File is good!\n");
-                                return 1;
+                                return FILE_OK;
                         }
                         else
                         {
                                 if(DBUG) printf("File is bad\n");
-                                return -1;
+                                return FILE_BAD;
                         }
                 }
         }
@@ -283,7 +292,7 @@ void usePhase(int fd, int socket, int windowSize,int bufferSize,struct sockaddr_
         int status = -1;
         int seq_num = 0;
         int bytesRead = -1;
-        int reached_EOF = -1; /* < 0 means not reached EOF, > 0 = seq num of last packet + means reached EOF */
+        int reached_EOF = 0; /* < 0 means not reached EOF, > 0 = seq num of last packet + means reached EOF */
         Window *win = NULL;
         int counter = 0;
         int pduLength = 0;
@@ -296,16 +305,20 @@ void usePhase(int fd, int socket, int windowSize,int bufferSize,struct sockaddr_
 
         WBuff *entry = NULL;
         int lowestSeq = 0;
-        int maxRR = -1;
+        uint32_t maxRR = 0;
+        int eof_counter = 0;
 
         while(status != DONE)
         {
                 while(windowOpen(win) && bytesRead)
                 {
+                        printf("FIRST LOOP!\n");
                         if(DBUG) printf("WINDOW OPEN, seq num = %d\n",getCurrent(win));
                         if((bytesRead = populatePayload(fd,payloadBuffer,bufferSize)) < bufferSize)
+                        {
+                                printf("HIT EOG!\n");
                                 reached_EOF = 1;
-
+                        }
                         if(bytesRead)
                         {
                                 /* delete this if check later */
@@ -321,12 +334,15 @@ void usePhase(int fd, int socket, int windowSize,int bufferSize,struct sockaddr_
                                 /* following line has to be after addEntry() b/c we're useing win.current above */
                                 shiftCurrent(win,1);
 
-                                while(pollCall(0) != -1)
-                                {
-                                        /* process server packet */
-                                        printf("GOT A MSG!\n");
-                                        serverFlag = processServerMsg(socket,win,server,serverPDU,&maxRR);
-                                }
+                        }
+                        
+                        while(pollCall(0) != -1)
+                        {
+                                /* process server packet */
+                                printf("GOT A MSG!\n");
+                                printf("B4: Lower = %d, curr = %d, upper = %d, numItems = %d\n",getLower(win),getCurrent(win),getUpper(win),getNumItems(win));
+                                serverFlag = processServerMsg(socket,win,server,serverPDU,&maxRR);
+                                printf("AFTER Lower = %d, curr = %d, upper = %d, numItems = %d\n",getLower(win),getCurrent(win),getUpper(win),getNumItems(win));
                         }
                 }
 
@@ -334,9 +350,11 @@ void usePhase(int fd, int socket, int windowSize,int bufferSize,struct sockaddr_
                 
                 counter = 0;
 
-                printf("MAXRR = %d, seq_num-1 = %d\n",maxRR,seq_num-1);
-                while(!windowOpen(win) || (maxRR < (getCurrent(win) - 1)))
+                printf("MAXRR = %d, seq_num-1 = %d\n",maxRR,getCurrent(win)-1);
+                printf("AFTER FIRST LOOP Lower = %d, curr = %d, upper = %d, numItems = %d\n",getLower(win),getCurrent(win),getUpper(win),getNumItems(win));
+                while(!windowOpen(win) || (maxRR < (getCurrent(win))))
                 {
+                        printf("2nd LOOP!\n");
                         if(DBUG) printf("WNDOW CLOSED!\n");
                         if(counter == 10) return; /* failed to get a server response after 10 transmission attempts, quit*/
                         
@@ -367,10 +385,21 @@ void usePhase(int fd, int socket, int windowSize,int bufferSize,struct sockaddr_
                 /* send eof packet -- but do NOT exit loop until server sends rr for last packet */
                 if(reached_EOF)
                 {
-                        if(DBUG) printf("REACHED EOF\n");
-                        sendData(socket,pduBuffer,HDR_LEN,payloadBuffer,0,server,0,F_EOF);
+                        if(eof_counter == 10) return;
+                        printf("REACHED EOF\n");
+                        sendData(socket,pduBuffer,-1,payloadBuffer,0,server,0,F_EOF);
+                        
+                        /* check this with him */
+                        if(pollCall(1000) != -1)
+                        {
+                                if((processServerMsg(socket,win,server,serverPDU,&maxRR)) == F_EOF_ACK)
+                                        status = DONE;
+                        }
+                        eof_counter++;
                 }
         }
+        
+        freeWindow(win);
 }
 
 int populatePayload(int fd, uint8_t *payload,int bufferSize)
@@ -399,7 +428,7 @@ int sendData(int socket, uint8_t *pduBuffer,int pduLength,uint8_t *payload,int p
         return pduLength;
 }
 
-int processServerMsg(int socket, Window *win, struct sockaddr_in6 *server, uint8_t *serverPDU,int *max_rr)
+int processServerMsg(int socket, Window *win, struct sockaddr_in6 *server, uint8_t *serverPDU,uint32_t *max_rr)
 {
         int serverAddrLen = sizeof(struct sockaddr_in6);
         int flag = -1;
@@ -418,22 +447,32 @@ int processServerMsg(int socket, Window *win, struct sockaddr_in6 *server, uint8
                 handle_rr(socket,win,serverPDU,max_rr);
         }
         /* received SREJ from server */
-        else
+        else if(flag == F_SREJ)
         {
                 handle_srej(socket,win,serverPDU,server);
+        }
+        /* received EOF ACK from server */
+        else if(flag == F_EOF_ACK)
+        {
+                handle_eof_ack(socket,server);
         }
 
         return flag;
 }
 
-void handle_rr(int socket,Window * win,uint8_t *serverPDU,int *maxRR)
+void handle_rr(int socket,Window * win,uint8_t *serverPDU,uint32_t *maxRR)
 {
-        int rr_num = serverPDU[PAYLOAD_OFF];
-        int offset = rr_num - getLower(win);
+        uint32_t net_rr_num;
+        uint32_t host_rr_num;
+        
+        memcpy(&net_rr_num,serverPDU+PAYLOAD_OFF,4);
+        host_rr_num = ntohl(net_rr_num);
 
-        if(rr_num > *maxRR)
+        int offset = host_rr_num - getLower(win);
+
+        if(host_rr_num > *maxRR)
         {
-                *maxRR = rr_num;
+                *maxRR = host_rr_num;
         }
 
         if(offset) slideWindow(win,offset);
@@ -445,4 +484,11 @@ void handle_srej(int socket,Window * win,uint8_t *serverPDU, struct sockaddr_in6
         WBuff *entry = getEntry(win,srej_num);
 
         sendData(socket,entry->savedPDU,entry->pduLength,NULL,0,server,srej_num,F_DATA);
+}
+
+void handle_eof_ack(int socket,struct sockaddr_in6 *server)
+{
+        uint8_t pduBuffer[MAXBUF];
+        uint8_t payloadBuffer[1];
+        sendData(socket,pduBuffer,-1,payloadBuffer,0,server,0,F_EOF_ACK_2);
 }

@@ -1,12 +1,13 @@
 #include <stdint.h>
 
-#define MAX_PDU 1400 
+#define MAX_PDU 1410 
 
 typedef struct WBuff
 {
         uint8_t savedPDU[MAX_PDU];
         int pduLength;
         uint32_t seq_num;
+        uint8_t filled;
 }WBuff;
 
 typedef struct Window
@@ -20,6 +21,8 @@ typedef struct Window
 }Window;
 
 Window *initWindow(int);
+void freeWindow(Window *);
+
 int getNumItems(Window *);
 int getIndex(Window *,int);
 
