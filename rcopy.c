@@ -352,7 +352,7 @@ void usePhase(int fd, int socket, int windowSize,int bufferSize,struct sockaddr_
 
                 printf("MAXRR = %d, seq_num-1 = %d\n",maxRR,getCurrent(win)-1);
                 printf("AFTER FIRST LOOP Lower = %d, curr = %d, upper = %d, numItems = %d\n",getLower(win),getCurrent(win),getUpper(win),getNumItems(win));
-                while(!windowOpen(win) || ((maxRR < (getCurrent(win))) && !bytesRead))
+                while(!windowOpen(win) || ((maxRR < (getCurrent(win))) && reached_EOF))
                 {
                         printf("2nd LOOP! counter = %d\n",counter);
                         if(DBUG) printf("WNDOW CLOSED!,maxRR = %d, current = %d\n",maxRR,getCurrent(win));
@@ -404,7 +404,7 @@ void usePhase(int fd, int socket, int windowSize,int bufferSize,struct sockaddr_
                 }
         }
 
-        printf("STATUS = %d, DONE = %d\n",status,DONE);
+        printf("STATUS = %d, DONE = %d,maxRR = %d,bytesRead = %d\n",status,DONE,maxRR,bytesRead);
         
         freeWindow(win);
 }
