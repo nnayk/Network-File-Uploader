@@ -105,7 +105,6 @@ int addEntry(Window *win, uint8_t *pduBuffer, int pduLength, int seq_num)
                 if(win->pduBuff[index]->seq_num != seq_num)
                 {
                         fprintf(stderr,"Bug with window! Trying to add seq num = %d even though %d is at that spot!\n",seq_num,win->pduBuff[index]->seq_num);
-                        return -1;
                 }
         }
         
@@ -156,14 +155,25 @@ WBuff *getEntry(Window *win, int seq_num)
         if(!argCheck(win)) return NULL;
         
         int index = getIndex(win,seq_num);
-        
-        if(index >= win->capacity)
+
+
+        printf("AFTERY! index = %d, cap = %d\n",index,win->capacity);
+        printf("happy days\n"); 
+        printf("jagi\n"); 
+        printf("index = %d,pduLength\n",index);
+        /*if(win->pduBuff[index])
+                printf("YEAH!\n");
+        printf("index = %d,pduLength = %d\n",index,win->pduBuff[index]->pduLength);*/
+
+
+        /*
+        if(!win->pduBuff[index]->filled || win->pduBuff[index]->seq_num != seq_num) 
         {
-                if(DBUG) fprintf(stderr,"%s\n","Index out of bounds!");
+                printf("RHETTY!\n");
                 return NULL;
         }
+        */
 
-        if(DBUG) printf("index = %d,pduLength = %d\n",index,win->pduBuff[index]->pduLength);
 
 
         return win->pduBuff[index];
@@ -171,10 +181,20 @@ WBuff *getEntry(Window *win, int seq_num)
 
 int existsEntry(Window *win,int seq_num)
 {
+        printf("INSIDE EXISTY!\n");
+
         WBuff *entry = getEntry(win,seq_num);
 
-        if(!entry || !entry->filled) return 0;
+        printf("BACK FROM GETTY!\n");
 
+        fflush(stdout);
+        if((!entry) || (!entry->filled) || (entry->seq_num != seq_num)) 
+        {
+                printf("RETURNING EXISTS ENTRY!\n");
+                return 0;
+        }
+
+        printf("RETURNING EXISTS ENTRY!\n");
         return 1;
 }
 

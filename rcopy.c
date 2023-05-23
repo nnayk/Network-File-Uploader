@@ -61,6 +61,40 @@ void handle_rr(int,Window *,uint8_t *,uint32_t *);
 void handle_srej(int,Window *,uint8_t *,struct sockaddr_in6 *);
 void handle_eof_ack(int,struct sockaddr_in6 *);
 
+/* custom drop functions -- delete later */
+int in_drop(uint32_t);
+int rm_drop(uint32_t);
+
+#define DROP_LEN 1
+uint32_t drop_dbug[] = {100};
+
+
+int in_drop(uint32_t seq)
+{
+        int i;
+        for(i=0;i<DROP_LEN;i++)
+        {
+                if(drop_dbug[i] == seq) return 1;
+        }
+
+        return 0;
+}
+
+int rm_drop(uint32_t seq)
+{
+        int i;
+        for(i=0;i<DROP_LEN;i++)
+        {
+                if(drop_dbug[i] == seq) 
+                {
+                        drop_dbug[i] = -1;
+                        return 1;
+                }
+        }
+
+        return 0;
+}
+
 int main (int argc, char *argv[])
  {
 	int socketNum = 0;				
@@ -168,7 +202,7 @@ int setupConnection(int socketNum,char *toFile, uint32_t windowSize, uint16_t bu
 	int serverAddrLen = sizeof(struct sockaddr_in6);
         
         uint16_t netBuffSize = htons(bufferSize);
-        uint32_t netWindowSize = htons(windowSize);
+        uint32_t netWindowSize = htonl(windowSize);
 
         memcpy(payloadBuffer+BUFF_SIZE_OFF_7,&netBuffSize,2);
         memcpy(payloadBuffer+WINDOW_SIZE_OFF_7,&netWindowSize,4);
@@ -331,6 +365,7 @@ void usePhase(int fd, int socket, int windowSize,int bufferSize,struct sockaddr_
                                 if(DBUG) printf("SENT %d bytes!, seq num = %d\n",pduLength,getCurrent(win));
 
                                 addEntry(win,pduBuffer,pduLength,getCurrent(win));
+                                
                                 /* following line has to be after addEntry() b/c we're useing win.current above */
                                 shiftCurrent(win,1);
 
@@ -355,7 +390,6 @@ void usePhase(int fd, int socket, int windowSize,int bufferSize,struct sockaddr_
                 while(!windowOpen(win) || ((maxRR < (getCurrent(win))) && reached_EOF))
                 {
                         printf("2nd LOOP! counter = %d\n",counter);
-                        if(DBUG) printf("WNDOW CLOSED!,maxRR = %d, current = %d\n",maxRR,getCurrent(win));
                         if(counter == 10) 
                         {
                                 printf("Counter timed out!\n");
@@ -373,6 +407,7 @@ void usePhase(int fd, int socket, int windowSize,int bufferSize,struct sockaddr_
                         /* else, resort to sending lowest packet */
                         else
                         {
+                                printf("POLLY TIMED OUT!\n");
                                 lowestSeq = getLower(win);
                                 if(DBUG) printf("lowest seq num = %d\n",lowestSeq);
                                 if(!(entry = getEntry(win,lowestSeq)))
@@ -381,6 +416,7 @@ void usePhase(int fd, int socket, int windowSize,int bufferSize,struct sockaddr_
                                         exit(3);
                                 }
 
+                                if(DBUG) fprintf(stderr,"WNDOW CLOSED!,maxRR = %d, current = %d\n",maxRR,getCurrent(win));
                                 sendData(socket,entry->savedPDU,entry->pduLength,NULL,0,server,lowestSeq,F_DATA);
                                 counter++;
                         }
@@ -425,10 +461,17 @@ int populatePayload(int fd, uint8_t *payload,int bufferSize)
 
 int sendData(int socket, uint8_t *pduBuffer,int pduLength,uint8_t *payload,int payloadLength, struct sockaddr_in6 *server,uint32_t seq_num, uint8_t flag)
 {
-
+        
         if(pduLength == -1) pduLength = createPDU(pduBuffer,seq_num,flag,payload,payloadLength);
 
         if(DBUG) printf("PDU length = %d\n",pduLength);
+        
+        if(in_drop(seq_num)) 
+        {
+                fprintf(stderr,"%s%d\n","DROPPED PACKET ",seq_num);
+                rm_drop(seq_num);
+                return pduLength;
+        }
         
         safeSendto(socket, pduBuffer, pduLength, 0, (struct sockaddr *) server, sizeof(struct sockaddr_in6));
 

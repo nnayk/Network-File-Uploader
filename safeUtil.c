@@ -38,7 +38,31 @@ int safeRecvfrom(int socketNum, void * buf, int len, int flags, struct sockaddr 
 
 int safeSendto(int socketNum, void * buf, int len, int flags, struct sockaddr *srcAddr, int addrLen)
 {
-	int returnValue = 0;
+#if 0
+        #include <unistd.h>
+        #include <string.h>
+        char response[2] = {0};
+        printf("DROP packet %d (Y/N)? ",((char *)buf)[0]);
+        fflush(stdout);
+        read(STDIN_FILENO,response,1);
+        if(!strcmp(response,"y")) 
+        {
+                printf("CUSTOM DROPPED PACKET %d\n",((char *)buf)[0]);
+                return 1;
+        }
+        else
+        {
+                int returnValue;
+                if((returnValue = sendto(socketNum,buf,(size_t)len,flags,srcAddr,(socklen_t)addrLen)) < 0)
+                {
+                        perror("sendto");
+                        exit(-1);
+                }
+
+                return returnValue;
+        }
+#endif
+        int returnValue = 0;
 	if ((returnValue = sendtoErr(socketNum, buf, (size_t) len, flags, srcAddr, (socklen_t) addrLen)) < 0)
 	{
 		perror("sendtoErr: ");

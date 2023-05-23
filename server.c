@@ -264,6 +264,7 @@ int processClientMsg(int fd,Endpoint *conn,Window *circBuff,uint8_t *clientPDU,u
         /* received EOF from client */
         else if(flag == F_EOF)
         {
+                printf("GONNA HANDLE EOF!\n");
                 handle_eof(conn,expRR,maxRR);
         }
 
@@ -288,6 +289,7 @@ void handle_data(Endpoint *conn,Window *circBuff,uint8_t *dataPDU,int pduLength,
 
         printf("HOST SEQ NUM = %d, expexted = %d, max = %d,payload length = %d\n",host_seq_num,*expRR,*maxRR,payloadLength);
 
+
         /* no loss case: got the expected sequence number, send RR */
         if(host_seq_num == *expRR)
         {
@@ -299,6 +301,7 @@ void handle_data(Endpoint *conn,Window *circBuff,uint8_t *dataPDU,int pduLength,
                         printf("BEFORE expr = %d\n",*expRR);
                         *(expRR) = *(expRR) + 1;
                         printf("NEW EXPRR = %d\n",*expRR);
+                        send_rr(conn,*expRR);
                         if(write(fd,dataPDU+PAYLOAD_OFF,payloadLength)==-1)
                         {
                                 perror("write");
@@ -312,6 +315,7 @@ void handle_data(Endpoint *conn,Window *circBuff,uint8_t *dataPDU,int pduLength,
                         addEntry(circBuff,dataPDU,pduLength,*expRR);
                         for(i=*expRR;i<=(*maxRR);i++)
                         {
+                                printf("INSIDE LOOP: i = %d, expRR = %d, maxRR = %d\n",i,*expRR,*maxRR);
                                 /* already buffered a packet, write it to the file and increment expected rr */
                                 if(existsEntry(circBuff,i)) 
                                 {
@@ -338,15 +342,21 @@ void handle_data(Endpoint *conn,Window *circBuff,uint8_t *dataPDU,int pduLength,
                                 }
                         }
                         
-                        if((*expRR) == *maxRR)
+                        if((*expRR) == ((*maxRR) + 1))
                         {
-                                *expRR = (*expRR) + 1;
+                                printf("RESET SENT_SREJ!\n");
                                 sent_srej = 0;
                         }
+                        else
+                        {
+                                printf("expRR = %d does not match maxRR = %d! sent_srej = %d\n",*expRR,*maxRR,sent_srej);
+                        }
+                        
+                        send_rr(conn,*expRR);
+                        if(host_seq_num > *maxRR) *maxRR = host_seq_num;
                 }
                 
                 printf("GOT EXPECTED RR = %d\n",*expRR);
-                send_rr(conn,*expRR);
         }
         /* loss case: buffer data and possibly send SREJ */
         else if(host_seq_num > *expRR)
@@ -357,15 +367,21 @@ void handle_data(Endpoint *conn,Window *circBuff,uint8_t *dataPDU,int pduLength,
                 /* send srej if not already done so for the window */
                 if(!sent_srej) 
                 {
+                        printf("SENDING SREJ = %d\n",*expRR);
                         send_srej(conn,*expRR);
                         sent_srej = 1;
                 }
+                else
+                {
+                        printf("UNABLE TO SEND SREJ = %d\n",*expRR);
+                }
+                if(host_seq_num > *maxRR) *maxRR = host_seq_num;
         }
         /* previous RR was lost, just resend it to please the client */
         else
         {
                 printf("GOT LOWER RR = %d, expected = %d\n",host_seq_num,*expRR);
-                send_rr(conn,host_seq_num+1);
+                send_rr(conn,*expRR);
         }
 }
 
@@ -377,7 +393,7 @@ int handle_eof(Endpoint *conn,uint32_t *expRR,uint32_t *maxRR)
         int reallyDone = 0;
 
         /* received all packets */
-        if(*expRR > *maxRR)
+        if(*expRR > *maxRR || (*expRR == 0 && *maxRR == 0))
         {
                 printf("SENDING EOF ACK!\n");
                 pduLength = createPDU(pduBuffer,0,F_EOF_ACK,dummy,0);

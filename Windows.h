@@ -12,11 +12,11 @@ typedef struct WBuff
 
 typedef struct Window
 {
-        int numItems;
-        int capacity;
-        int lower;
-        int current;
-        int upper;
+        uint32_t numItems;
+        uint32_t capacity;
+        uint32_t lower;
+        uint32_t current;
+        uint64_t upper;
         WBuff **pduBuff;
 }Window;
 
