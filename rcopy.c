@@ -43,6 +43,7 @@
 
 /* data phase status macros */
 #define DONE 0
+#define SREJ_BAD 20
 
 
 void talkToServer(int socketNum, struct sockaddr_in6 * server);
@@ -65,8 +66,10 @@ void handle_eof_ack(int,struct sockaddr_in6 *);
 int in_drop(uint32_t);
 int rm_drop(uint32_t);
 
-#define DROP_LEN 1
-uint32_t drop_dbug[] = {100};
+
+#if 1
+#define DROP_LEN 0
+uint32_t drop_dbug[] = {1};
 
 
 int in_drop(uint32_t seq)
@@ -94,6 +97,7 @@ int rm_drop(uint32_t seq)
 
         return 0;
 }
+#endif 
 
 int main (int argc, char *argv[])
  {
@@ -324,13 +328,11 @@ void usePhase(int fd, int socket, int windowSize,int bufferSize,struct sockaddr_
         uint8_t serverPDU[MAXBUF] = {0};
         uint8_t payloadBuffer[MAXPAYLOAD] = {0};
         int status = -1;
-        int seq_num = 0;
         int bytesRead = -1;
         int reached_EOF = 0; /* < 0 means not reached EOF, > 0 = seq num of last packet + means reached EOF */
         Window *win = NULL;
         int counter = 0;
         int pduLength = 0;
-        int serverFlag = -1;
         
         if(!(win = initWindow(windowSize)))
         {
@@ -344,7 +346,7 @@ void usePhase(int fd, int socket, int windowSize,int bufferSize,struct sockaddr_
 
         while(status != DONE)
         {
-                while(windowOpen(win) && bytesRead)
+                while(windowOpen(win) && !reached_EOF)
                 {
                         printf("FIRST LOOP!\n");
                         if(DBUG) printf("WINDOW OPEN, seq num = %d\n",getCurrent(win));
@@ -376,7 +378,7 @@ void usePhase(int fd, int socket, int windowSize,int bufferSize,struct sockaddr_
                                 /* process server packet */
                                 printf("GOT A MSG!\n");
                                 printf("B4: Lower = %d, curr = %d, upper = %d, numItems = %d\n",getLower(win),getCurrent(win),getUpper(win),getNumItems(win));
-                                serverFlag = processServerMsg(socket,win,server,serverPDU,&maxRR);
+                                processServerMsg(socket,win,server,serverPDU,&maxRR);
                                 printf("AFTER Lower = %d, curr = %d, upper = %d, numItems = %d\n",getLower(win),getCurrent(win),getUpper(win),getNumItems(win));
                         }
                 }
@@ -400,7 +402,7 @@ void usePhase(int fd, int socket, int windowSize,int bufferSize,struct sockaddr_
                         if(pollCall(1000) != -1)
                         {
                                 if(DBUG) printf("POLL READY!\n");
-                                serverFlag = processServerMsg(socket,win,server,serverPDU,&maxRR);
+                                processServerMsg(socket,win,server,serverPDU,&maxRR);
                                 counter = 0;
                         }
 
@@ -426,7 +428,11 @@ void usePhase(int fd, int socket, int windowSize,int bufferSize,struct sockaddr_
                 /* send eof packet -- but do NOT exit loop until server sends rr for last packet */
                 if(reached_EOF)
                 {
-                        if(eof_counter == 10) return;
+                        if(eof_counter == 10) 
+                        {
+                                printf("EOF COUNTER TIMED OUT!\n");
+                                return;
+                        }
                         printf("REACHED EOF\n");
                         sendData(socket,pduBuffer,-1,payloadBuffer,0,server,0,F_EOF);
                         
@@ -541,10 +547,11 @@ void handle_srej(int socket,Window * win,uint8_t *serverPDU, struct sockaddr_in6
         host_srej_num = ntohl(net_srej_num);
         
         printf("SREJ = %d\n",host_srej_num);
+
         WBuff *entry = getEntry(win,host_srej_num);
 
         sendData(socket,entry->savedPDU,entry->pduLength,NULL,0,server,host_srej_num,F_DATA);
-        if(DBUG) printf("SREJ: SENT %d bytes!, seq num = %d\n",entry->pduLength,entry->seq_num);
+        printf("SREJ: SENT %d bytes!, seq num = %d vs actual = %d\n",entry->pduLength,entry->seq_num,host_srej_num);
 }
 
 void handle_eof_ack(int socket,struct sockaddr_in6 *server)

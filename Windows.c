@@ -23,6 +23,7 @@ Window *argCheck(Window *);
 
 Window *initWindow(int capacity)
 {
+        int i;
         Window *win = sCalloc(1,sizeof(Window)); /* switch to malloc */
         win->capacity = capacity;
         win->numItems = 0;
@@ -30,7 +31,11 @@ Window *initWindow(int capacity)
         win->current = 0;
         win->upper = capacity;
         win->pduBuff = (WBuff **)sCalloc(capacity,sizeof(WBuff *));
-
+        
+        for(i=0;i<capacity;i++)
+        {
+                win->pduBuff[i] = (WBuff *)sCalloc(1,sizeof(WBuff));
+        }
 
         return win;
 }
@@ -108,7 +113,7 @@ int addEntry(Window *win, uint8_t *pduBuffer, int pduLength, int seq_num)
                 }
         }
         
-        win->pduBuff[index] = (WBuff *)sCalloc(1,sizeof(WBuff));
+        /*win->pduBuff[index] = (WBuff *)sCalloc(1,sizeof(WBuff));*/
 
         memcpy(win->pduBuff[index]->savedPDU, pduBuffer, pduLength);
         win->pduBuff[index]->seq_num = seq_num;
@@ -130,7 +135,7 @@ int addEntry(Window *win, uint8_t *pduBuffer, int pduLength, int seq_num)
 int delEntry(Window *win, int seq_num)
 {
         if(!argCheck(win)) return 0;
-       
+                
         int index = getIndex(win,seq_num);
 
         if(index >= win->capacity)
@@ -139,12 +144,22 @@ int delEntry(Window *win, int seq_num)
                 return 0;
         }
 
+
+        printf("aaa seq_num = %d\n",seq_num);
+        printf("bbb %d\n",win->pduBuff[index]->seq_num);
+
+        if((win->pduBuff[index]->seq_num) != seq_num) 
+        {
+                printf("Bad delete!\n");
+                return 0;
+        }
+        
+        printf("ccc\n");
+
         win->pduBuff[index]->filled = 0;
         win->pduBuff[index]->pduLength = -1;
         win->pduBuff[index]->seq_num = 0;
 
-
-        
         win->numItems--;
         
         return 1;
@@ -190,7 +205,7 @@ int existsEntry(Window *win,int seq_num)
         fflush(stdout);
         if((!entry) || (!entry->filled) || (entry->seq_num != seq_num)) 
         {
-                printf("RETURNING EXISTS ENTRY!\n");
+                printf("RETURNING DNE ENTRY!\n");
                 return 0;
         }
 

@@ -5,7 +5,7 @@
 typedef struct WBuff
 {
         uint8_t savedPDU[MAX_PDU];
-        int pduLength;
+        uint32_t pduLength;
         uint32_t seq_num;
         uint8_t filled;
 }WBuff;

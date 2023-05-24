@@ -17,6 +17,41 @@
 #include "cpe464.h"
 #endif
 
+#if 1
+#include <stdint.h>
+#define DROP_MSG_LEN 0
+uint32_t drop_dbug2[] = {20,21,22,23,24,25,26,27,28,29,30};
+//uint32_t drop_dbug2[] = {5,18,30,31, 35,37};
+
+
+
+int in_drop2(uint32_t seq)
+{
+        int i;
+        for(i=0;i<DROP_MSG_LEN;i++)
+        {
+                if(drop_dbug2[i] == seq) return 1;
+        }
+
+        return 0;
+}
+
+int rm_drop2(uint32_t seq)
+{
+        int i;
+        for(i=0;i<DROP_MSG_LEN;i++)
+        {
+                if(drop_dbug2[i] == seq) 
+                {
+                        drop_dbug2[i] = -1;
+                        return 1;
+                }
+        }
+
+        return 0;
+}
+#endif 
+
 int safeRecvfrom(int socketNum, void * buf, int len, int flags, struct sockaddr *srcAddr, int * addrLen)
 {
 	int returnValue = 0;
@@ -38,6 +73,17 @@ int safeRecvfrom(int socketNum, void * buf, int len, int flags, struct sockaddr 
 
 int safeSendto(int socketNum, void * buf, int len, int flags, struct sockaddr *srcAddr, int addrLen)
 {
+#if 1
+        static int msg = 0;
+        if(in_drop2(msg) && len < 20)
+        {
+                fprintf(stderr,"%s %d\n","SAFE SEND DROPPED PACKET ",msg); 
+                rm_drop2(msg);
+                msg++;
+                return 0;
+        }
+        msg++;
+#endif
 #if 0
         #include <unistd.h>
         #include <string.h>
