@@ -1,5 +1,10 @@
-// Client side - UDP Code				    
-
+/* 
+ * Nakul Nayak
+ * CPE 464
+ * Description:
+ This file contains the client side code
+ */
+			    
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/types.h>
@@ -46,8 +51,6 @@
 #define DONE 0
 #define SREJ_BAD 20
 
-
-void talkToServer(int socketNum, struct sockaddr_in6 * server);
 int readFromStdin(char * buffer);
 int checkArgs(int argc, char * argv[]);
 
@@ -83,20 +86,17 @@ int main (int argc, char *argv[])
 
         /* parse runtime args */
         errorRate = atof(argv[IN_ERR_OFF]);
-        
         if((windowSize = atoi(argv[IN_WIN_OFF])) <= 0)
         {
                 fprintf(stderr,"%s%d\n","Invalid window size ",windowSize);
                 exit(EXIT_FAILURE);
         
         }
-
         if((bufferSize = atoi(argv[IN_BUFF_OFF])) <= 0)
         {
                 fprintf(stderr,"%s%d\n","Invalid buffer size ",bufferSize);
                 exit(EXIT_FAILURE);
         }
-
 
         fromFile = argv[IN_FROM_OFF];
         toFile = argv[IN_TO_OFF];
@@ -105,11 +105,6 @@ int main (int argc, char *argv[])
         {
                 fprintf(stderr,"Output file name length %d too long (max. %d)",(int)strlen(toFile),MAX_FILE_LEN);
                 exit(EXIT_FAILURE);
-        }
-
-        if(DBUG) 
-        {
-                if(DBUG) printf("ARGS: from = %s, to = %s, window = %d, buffer = %d, err = %.2f, host = %s, port = %d\n", fromFile, toFile, windowSize, bufferSize, errorRate, argv[IN_HOST_OFF], portNumber);
         }
 
         /* args are good, start the setup */
@@ -125,7 +120,7 @@ int main (int argc, char *argv[])
         setupPollSet();
         addToPollSet(socketNum);
 
-	
+	/* set the error rate */
         sendErr_init(errorRate,DROP_ON,FLIP_ON,DEBUG_ON,RSEED_OFF);
 
         /* setup phase -- send file request up to 10 times (exit if no response after 10 attempts) */
@@ -149,11 +144,8 @@ int main (int argc, char *argv[])
 
         /* use phase */
         usePhase(fd,socketNum,windowSize,bufferSize,&server);
-
 	
-        /*talkToServer(socketNum, &server);*/
-	
-	/* teardown */
+	/* teardown phase */
         if(DBUG) printf("CLIENT TEARDOWN!\n");
         close(fd);
         close(socketNum);
@@ -161,7 +153,15 @@ int main (int argc, char *argv[])
 	return 0;
 }
 
-/* returns 1 if file approved, 0 if no response, -1 if rejected*/
+/**
+ * Setup the application connection via a file upload request to the server.
+ * Return 1 upon successful connection, 0 if no server response, -1 if rejected.
+ * @param socketNum: the socket number to use
+ * @param toFile: the name of the file to store on the server
+ * @param windowSize: the window size to use
+ * @param bufferSize: the buffer size to use
+ * @param server: the server address
+*/
 int setupConnection(int socketNum,char *toFile, uint32_t windowSize, uint16_t bufferSize, struct sockaddr_in6 * server)
 {
         int payloadLen = 1 + strlen(toFile) + 1 + BUFF_BYTES + WINDOW_BYTES;
@@ -196,7 +196,7 @@ int setupConnection(int socketNum,char *toFile, uint32_t windowSize, uint16_t bu
                 if(safeRecvfrom(socketNum,responseBuffer,MAXBUF,0,(struct sockaddr *)server,&serverAddrLen) == CRC_ERR)
                 {
                         if(DBUG) printf("CRC err\n");
-                        return TIMEOUT; /* pretend like we didn't receive a packet if there's a CRC error */
+                        return TIMEOUT; /* ignore the packet if there's a CRC error */
                 }
                 else
                 {
@@ -212,39 +212,6 @@ int setupConnection(int socketNum,char *toFile, uint32_t windowSize, uint16_t bu
                         }
                 }
         }
-}
-
-void talkToServer(int socketNum, struct sockaddr_in6 * server)
-{
-	int serverAddrLen = sizeof(struct sockaddr_in6);
-	char * ipString = NULL;
-	int dataLen = 0;
-        char pduBuffer[MAXBUF+1] = {0};
-	char buffer[MAXBUF+1] = {0};
-        int pduLength = 0;
-        static int counter = 0;
-
-	
-	buffer[0] = '\0';
-	while (buffer[0] != '.')
-	{
-		dataLen = readFromStdin(buffer);
-
-		if(DBUG) printf("Sending: %s with len: %d\n", buffer,dataLen);
-	
-		pduLength = createPDU((uint8_t *)pduBuffer,counter,92,(uint8_t *)buffer,dataLen);
-                counter += 1;
-
-                safeSendto(socketNum, pduBuffer, pduLength, 0, (struct sockaddr *) server, serverAddrLen);
-
-		
-		//safeRecvfrom(socketNum, buffer, MAXBUF, 0, (struct sockaddr *) server, &serverAddrLen);
-		
-		// print out bytes received
-		ipString = ipAddressToString(server);
-		if(DBUG) printf("Server with ip: %s and port %d said it received %s\n", ipString, ntohs(server->sin6_port), buffer);
-	      
-	}
 }
 
 int readFromStdin(char * buffer)
