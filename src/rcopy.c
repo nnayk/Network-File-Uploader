@@ -51,7 +51,6 @@
 #define DONE 0
 #define SREJ_BAD 20
 
-int readFromStdin(char * buffer);
 int checkArgs(int argc, char * argv[]);
 
 int setupConnection(int, char *,uint32_t,uint16_t,struct sockaddr_in6 *);
@@ -155,12 +154,12 @@ int main (int argc, char *argv[])
 
 /**
  * Setup the application connection via a file upload request to the server.
- * Return 1 upon successful connection, 0 if no server response, -1 if rejected.
  * @param socketNum: the socket number to use
  * @param toFile: the name of the file to store on the server
  * @param windowSize: the window size to use
  * @param bufferSize: the buffer size to use
  * @param server: the server address
+ * @return: 1 upon successful connection, 0 if no server response, -1 if rejected.
 */
 int setupConnection(int socketNum,char *toFile, uint32_t windowSize, uint16_t bufferSize, struct sockaddr_in6 * server)
 {
@@ -214,31 +213,15 @@ int setupConnection(int socketNum,char *toFile, uint32_t windowSize, uint16_t bu
         }
 }
 
-int readFromStdin(char * buffer)
-{
-	char aChar = 0;
-	int inputLen = 0;        
-	
-	// Important you don't input more characters than you have space 
-	buffer[0] = '\0';
-	if(DBUG) printf("Enter data: ");
-	while (inputLen < (MAXBUF - 1) && aChar != '\n')
-	{
-		aChar = getchar();
-		if (aChar != '\n')
-		{
-			buffer[inputLen] = aChar;
-			inputLen++;
-		}
-	}
-	
-	// Null terminate the string
-	buffer[inputLen] = '\0';
-	inputLen++;
-	
-	return inputLen;
-}
-
+/**
+ * Validate command line args.
+ * @param socketNum: the socket number to use
+ * @param toFile: the name of the file to store on the server
+ * @param windowSize: the window size to use
+ * @param bufferSize: the buffer size to use
+ * @param server: the server address
+ * @return: the server port number given by user
+*/
 int checkArgs(int argc, char * argv[])
 {
 
@@ -256,7 +239,14 @@ int checkArgs(int argc, char * argv[])
 	return portNumber;
 }
 
-/* communicate w/server via SREJ protocol */
+/**
+ * Communicate w/server via SREJ protocol.
+ * @param fd: the file descriptor of the file to read from
+ * @param socket: the socket number for the UDP connection
+ * @param windowSize: the window size for SREJ protocol
+ * @param bufferSize: the buffer size for SREJ protocol
+ * @param server: the server address
+*/
 void usePhase(int fd, int socket, int windowSize,int bufferSize,struct sockaddr_in6 *server)
 {
         uint8_t pduBuffer[MAXBUF] = {0};
@@ -269,6 +259,7 @@ void usePhase(int fd, int socket, int windowSize,int bufferSize,struct sockaddr_
         int counter = 0;
         int pduLength = 0;
         
+        /* set up the window structure */
         if(!(win = initWindow(windowSize)))
         {
                 fprintf(stderr,"%s\n","Init window");
@@ -288,6 +279,7 @@ void usePhase(int fd, int socket, int windowSize,int bufferSize,struct sockaddr_
                 {
                         if(DBUG) printf("FIRST LOOP!\n");
                         if(DBUG) printf("WINDOW OPEN, seq num = %d\n",getCurrent(win));
+                        /* populare the buffer with the next chunk of file data */
                         if((bytesRead = populatePayload(fd,payloadBuffer,bufferSize)) < bufferSize)
                         {
                                 if(DBUG) printf("HIT EOG!\n");
@@ -295,7 +287,6 @@ void usePhase(int fd, int socket, int windowSize,int bufferSize,struct sockaddr_
                         }
                         if(bytesRead)
                         {
-                                /* delete this if check later */
                                 if((pduLength = sendData(socket,pduBuffer,-1,payloadBuffer,bytesRead,server,(uint32_t)getCurrent(win),F_DATA)) == -1)
                                 {
                                         fprintf(stderr,"%s\n","Send data issue");
@@ -305,7 +296,6 @@ void usePhase(int fd, int socket, int windowSize,int bufferSize,struct sockaddr_
                                 if(DBUG) printf("SENT %d bytes!, seq num = %d\n",pduLength,getCurrent(win));
 
                                 addEntry(win,pduBuffer,pduLength,getCurrent(win));
-                                
                                 /* following line has to be after addEntry() b/c we're useing win.current above */
                                 shiftCurrent(win,1);
 
@@ -393,7 +383,13 @@ void usePhase(int fd, int socket, int windowSize,int bufferSize,struct sockaddr_
         freeWindow(win);
 }
 
-/* fills the given buffer with the next sequence of bytes from the file */
+/**
+ * Fill the given buffer with the next sequence of bytes from the file.
+ * @param fd: the file descriptor of the file to read from
+ * @param payload: the buffer to store the file data in
+ * @param bufferSize: the size of the buffer
+ * @return: the number of bytes read from the file
+*/
 int populatePayload(int fd, uint8_t *payload,int bufferSize)
 {
         int bytesRead = 0;
@@ -408,7 +404,18 @@ int populatePayload(int fd, uint8_t *payload,int bufferSize)
         return bytesRead;
 }
 
-/* wrapper function to send data to server */
+/**
+ * Wrapper function to create and send PDU to server.
+ * @param socket: the socket number to use
+ * @param pduBuffer: the buffer to store the pdu in
+ * @param pduLength: the length of the pdu
+ * @param payload: the payload to send
+ * @param payloadLength: the length of the payload
+ * @param server: the server address
+ * @param seq_num: the sequence number of the pdu
+ * @param flag: the flag of the pdu
+ * @return: the length of the pdu
+*/
 int sendData(int socket, uint8_t *pduBuffer,int pduLength,uint8_t *payload,int payloadLength, struct sockaddr_in6 *server,uint32_t seq_num, uint8_t flag)
 {
         
@@ -421,7 +428,15 @@ int sendData(int socket, uint8_t *pduBuffer,int pduLength,uint8_t *payload,int p
         return pduLength;
 }
 
-/* handle RR and SREJ messages from server. This function carries out the rules of the SREJ protocol */
+/*  */
+/**
+ * Handle RR and SREJ messages from server. This function essentially carries out client side implementation of SREJ protocol.
+ * @param socket: the socket number to use
+ * @param win: the window structure to use
+ * @param server: the server address
+ * @param serverPDU: the pdu received from the server
+ * @param max_rr: the maximum RR number received from the server so far
+*/
 int processServerMsg(int socket, Window *win, struct sockaddr_in6 *server, uint8_t *serverPDU,uint32_t *max_rr)
 {
         int serverAddrLen = sizeof(struct sockaddr_in6);
