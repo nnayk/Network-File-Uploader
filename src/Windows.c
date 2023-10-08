@@ -1,7 +1,8 @@
 /* 
  * Nakul Nayak
  * CPE 453
- * Description: 
+ * Description:
+ * Functions relevant to the window data structure.
  */
 
 /* header files */
@@ -14,7 +15,7 @@
 #include "cpe464.h"
 
 /* macros, if any */
-#define DBUG 1
+#define DBUG 0
 
 /* function prototypes */
 Window *argCheck(Window *);
@@ -145,16 +146,15 @@ int delEntry(Window *win, int seq_num)
         }
 
 
-        printf("aaa seq_num = %d\n",seq_num);
-        printf("bbb %d\n",win->pduBuff[index]->seq_num);
+        if(DBUG) printf("seq_num = %d\n",seq_num);
 
         if((win->pduBuff[index]->seq_num) != seq_num) 
         {
-                printf("Bad delete!\n");
+                if(DBUG) printf("Bad delete!\n");
                 return 0;
         }
         
-        printf("ccc\n");
+        if(DBUG) printf("ccc\n");
 
         win->pduBuff[index]->filled = 0;
         win->pduBuff[index]->pduLength = -1;
@@ -171,45 +171,19 @@ WBuff *getEntry(Window *win, int seq_num)
         
         int index = getIndex(win,seq_num);
 
-
-        printf("AFTERY! index = %d, cap = %d\n",index,win->capacity);
-        printf("happy days\n"); 
-        printf("jagi\n"); 
-        printf("index = %d,pduLength\n",index);
-        /*if(win->pduBuff[index])
-                printf("YEAH!\n");
-        printf("index = %d,pduLength = %d\n",index,win->pduBuff[index]->pduLength);*/
-
-
-        /*
-        if(!win->pduBuff[index]->filled || win->pduBuff[index]->seq_num != seq_num) 
-        {
-                printf("RHETTY!\n");
-                return NULL;
-        }
-        */
-
-
-
         return win->pduBuff[index];
 }
 
 int existsEntry(Window *win,int seq_num)
 {
-        printf("INSIDE EXISTY!\n");
-
         WBuff *entry = getEntry(win,seq_num);
-
-        printf("BACK FROM GETTY!\n");
 
         fflush(stdout);
         if((!entry) || (!entry->filled) || (entry->seq_num != seq_num)) 
         {
-                printf("RETURNING DNE ENTRY!\n");
                 return 0;
         }
 
-        printf("RETURNING EXISTS ENTRY!\n");
         return 1;
 }
 

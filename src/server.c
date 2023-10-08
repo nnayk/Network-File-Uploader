@@ -1,5 +1,4 @@
 /* Server side - UDP Code				    */
-/* By Hugh Smith	4/1/2017	*/
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -12,6 +11,8 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#include <sys/wait.h>
+#include <signal.h>
 
 #include "gethostbyname.h"
 #include "networks.h"
@@ -24,7 +25,7 @@
 #include "Windows.h"
 
 #define MAXBUF 1410
-#define DBUG 1
+#define DBUG 0
 
 void processClient(int socketNum);
 int checkArgs(int argc, char *argv[]);
@@ -37,76 +38,49 @@ void send_rr(Endpoint *,uint32_t);
 void send_srej(Endpoint *,uint32_t);
 int handle_eof(Endpoint *,uint32_t *,uint32_t *);
 
-#if 1
-#define DROP_LEN 0
-uint32_t drop_dbug[] = {20,21,22,23,24,25,26,27,28,29,30};
-
-
-int in_drop(uint32_t seq)
-{
-        int i;
-        for(i=0;i<DROP_LEN;i++)
-        {
-                if(drop_dbug[i] == seq) return 1;
-        }
-
-        return 0;
-}
-
-int rm_drop(uint32_t seq)
-{
-        int i;
-        for(i=0;i<DROP_LEN;i++)
-        {
-                if(drop_dbug[i] == seq) 
-                {
-                        drop_dbug[i] = -1;
-                        return 1;
-                }
-        }
-
-        return 0;
-}
-#endif 
+void handleZombies(int sig);
 
 int main ( int argc, char *argv[]  )
 { 
-	int socketNum = 0;				
+	/* runtime args */
+        int socketNum = 0;				
 	int portNumber = 0;
         double errorRate = 0.0;
+
+        /* stores data for the file request PDU from client */
         uint8_t fileReqBuffer[MAXBUF];
         int pduLength = 0;
+
         pid_t pid; 
 	struct sockaddr_in6 client;		
 	int clientAddrLen = sizeof(client);	
         uint16_t bufferSize;
         uint32_t windowSize;
 
-	portNumber = checkArgs(argc, argv);
+	/* make sure args are valid */
+        portNumber = checkArgs(argc, argv);
         
         errorRate = atof(argv[1]);
         if(DBUG) printf("Given error rate %.2f\n",errorRate); 
 		
 	socketNum = udpServerSetup(portNumber);
         
+        /* setup structures to manage the connection(s) */
         sendErr_init(errorRate,DROP_ON,FLIP_ON,DEBUG_ON,RSEED_OFF);
         setupPollSet();
         addToPollSet(socketNum);
+        signal(SIGCHLD, handleZombies);
 
+        /* accept new clients and communicate w/them via child processes */
         while(1)
         {
-                if(pollCall(-1) != socketNum)
-                {
-                        fprintf(stderr,"%s\n","Huh?");
-                        exit(-1);
-                }
-
                 if((pduLength = safeRecvfrom(socketNum, fileReqBuffer,MAXBUF, 0, (struct sockaddr *) &client, &clientAddrLen)) == CRC_ERR)
                 {
                         continue; /* packet is corrupted, ignore it */
                 }
 		
                 if(DBUG) printf("RECV %d bytes\n",pduLength);
+                /* child exits loop */
                 if(!(pid=fork()))
                 {
                         if(DBUG) printf("FORKED!\n");
@@ -119,6 +93,7 @@ int main ( int argc, char *argv[]  )
                 }
         }
 
+        /* child process -- setup, use, teardown phases to connect  with client */
         if(pid==0)
         {
                 int fd = 0;
@@ -144,14 +119,17 @@ int main ( int argc, char *argv[]  )
                         close(childConn.socket);
                         return 0;
                 }
+                /* approve file */
                 else
                 {
                         send_file_response(childConn,FILE_OK);
                 }
                 
+                /* use phase */
                 serverUsePhase(fd,&childConn,windowSize,bufferSize);
                 
-                printf("SERVER TEARDOWN!\n");
+                /* teardown phase */
+                if(DBUG) printf("SERVER TEARDOWN!\n");
                 close(fd);
                 close(childConn.socket);
         }
@@ -179,7 +157,7 @@ int handle_file_req(Endpoint childConn,uint8_t *buffer,uint32_t *windowSize,uint
         *windowSize = ntohl(netWindowSize);
 
 
-        printf("SERVER GOT FILENAME OUTPUT %s, len = %ld,windowSize = %d, bufferSize = %d\n",filename,strlen(filename),*windowSize,*bufferSize);
+        if(DBUG) printf("SERVER GOT FILENAME OUTPUT %s, len = %ld,windowSize = %d, bufferSize = %d\n",filename,strlen(filename),*windowSize,*bufferSize);
 
         if((fd = open(filename, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP)) == -1)
         {
@@ -190,6 +168,7 @@ int handle_file_req(Endpoint childConn,uint8_t *buffer,uint32_t *windowSize,uint
         return fd;
 }
 
+/* either approve or reject client file request */
 void send_file_response(Endpoint childConn, uint8_t status)
 {
         uint8_t pduBuffer[MAXBUF] = {0};
@@ -211,9 +190,9 @@ void processClient(int socketNum)
 		dataLen = safeRecvfrom(socketNum, buffer, MAXBUF, 0, (struct sockaddr *) &client, &clientAddrLen);
 	
                 printPDU((uint8_t *)buffer,dataLen);
-		printf("Received message from client with ");
+		if(DBUG) printf("Received message from client with ");
 		printIPInfo(&client);
-		printf(" Len: %d \'%s\'\n", dataLen, buffer+7);
+		if(DBUG) printf(" Len: %d \'%s\'\n", dataLen, buffer+7);
 
 		// just for fun send back to client number of bytes received
 		sprintf(buffer, "bytes: %d", dataLen);
@@ -222,6 +201,7 @@ void processClient(int socketNum)
 	}
 }
 
+/* utility function that checks runtime args. Returns port number if args are valid, else terminates process */
 int checkArgs(int argc, char *argv[])
 {
 	// Checks args and returns port number
@@ -241,6 +221,7 @@ int checkArgs(int argc, char *argv[])
 	return portNumber;
 }
 
+/* facilitates actual exchange of packets view SREJ protocol */
 void serverUsePhase(int fd,Endpoint *conn,uint32_t windowSize,uint16_t bufferSize)
 {
         int clientFlag = -1;
@@ -252,6 +233,7 @@ void serverUsePhase(int fd,Endpoint *conn,uint32_t windowSize,uint16_t bufferSiz
         setupPollSet();
         addToPollSet(conn->socket);
 
+        /* loop indefinitely and accept client packets. Exit once the EOF Ack from client is received or server times out */
         while(1)
         {
                 if(pollCall(10000) == -1)
@@ -269,6 +251,7 @@ void serverUsePhase(int fd,Endpoint *conn,uint32_t windowSize,uint16_t bufferSiz
         freeWindow(circBuff);
 }
 
+/* given a PDU, drops it if there's a CRC error, else sends an appropriate RR and/or SREJ. Returns the flag of the client PDU.*/
 int processClientMsg(int fd,Endpoint *conn,Window *circBuff,uint8_t *clientPDU,uint32_t *expRR, uint32_t *maxRR,int bufferSize)
 {
         int clientAddrLen = sizeof(struct sockaddr_in6);
@@ -284,17 +267,17 @@ int processClientMsg(int fd,Endpoint *conn,Window *circBuff,uint8_t *clientPDU,u
  
         flag = clientPDU[FLAG_OFF];
         
-        printf("CLIENT FLAG = %d\n",flag);
+        if(DBUG) printf("CLIENT FLAG = %d\n",flag);
         /* received data from client */
         if(flag == F_DATA)
         {
-                printf("GONNA HANDLE DATA\n");
+                if(DBUG) printf("GONNA HANDLE DATA\n");
                 handle_data(conn,circBuff,clientPDU,pduLength,expRR,maxRR,fd);
         }
         /* received EOF from client */
         else if(flag == F_EOF)
         {
-                printf("GONNA HANDLE EOF!\n");
+                if(DBUG) printf("GONNA HANDLE EOF!\n");
                 handle_eof(conn,expRR,maxRR);
         }
 
@@ -303,6 +286,7 @@ int processClientMsg(int fd,Endpoint *conn,Window *circBuff,uint8_t *clientPDU,u
         return flag;
 }
 
+/* takes care of data packets received from client. Decides what packet(s) to send back */
 void handle_data(Endpoint *conn,Window *circBuff,uint8_t *dataPDU,int pduLength,uint32_t *expRR,uint32_t *maxRR,int fd)
 {
         uint32_t network_seq_num = 0;
@@ -317,7 +301,7 @@ void handle_data(Endpoint *conn,Window *circBuff,uint8_t *dataPDU,int pduLength,
 
         host_seq_num = ntohl(network_seq_num);
 
-        printf("HOST SEQ NUM = %d, expexted = %d, max = %d,payload length = %d\n",host_seq_num,*expRR,*maxRR,payloadLength);
+        if(DBUG) printf("HOST SEQ NUM = %d, expexted = %d, max = %d,payload length = %d\n",host_seq_num,*expRR,*maxRR,payloadLength);
 
 
         /* no loss case: got the expected sequence number, send RR */
@@ -328,9 +312,9 @@ void handle_data(Endpoint *conn,Window *circBuff,uint8_t *dataPDU,int pduLength,
                 {
                         
                         *maxRR = host_seq_num;
-                        printf("BEFORE expr = %d\n",*expRR);
+                        if(DBUG) printf("BEFORE expr = %d\n",*expRR);
                         *(expRR) = *(expRR) + 1;
-                        printf("NEW EXPRR = %d\n",*expRR);
+                        if(DBUG) printf("NEW EXPRR = %d\n",*expRR);
                         send_rr(conn,*expRR);
                         if(write(fd,dataPDU+PAYLOAD_OFF,payloadLength)==-1)
                         {
@@ -338,10 +322,10 @@ void handle_data(Endpoint *conn,Window *circBuff,uint8_t *dataPDU,int pduLength,
                                 exit(EXIT_FAILURE);
                         }
 
-                        printf("WROTE1 %d\n",host_seq_num);
-
-                        printf("ADI\n");
-                        printf("BABLOO\n");
+                        if(DBUG)
+                        {
+                                printf("WROTE1 %d\n",host_seq_num);
+                        }
                 }
                 
                 /* received a packet that was previously lost and resent by client */
@@ -350,18 +334,18 @@ void handle_data(Endpoint *conn,Window *circBuff,uint8_t *dataPDU,int pduLength,
                         addEntry(circBuff,dataPDU,pduLength,*expRR);
                         for(i=*expRR;i<=(*maxRR);i++)
                         {
-                                printf("INSIDE LOOP: i = %d, expRR = %d, maxRR = %d\n",i,*expRR,*maxRR);
+                                if(DBUG) printf("INSIDE LOOP: i = %d, expRR = %d, maxRR = %d\n",i,*expRR,*maxRR);
                                 /* already buffered a packet, write it to the file and increment expected rr */
                                 if(existsEntry(circBuff,i)) 
                                 {
-                                        printf("i=%d exists!\n",i);
+                                        if(DBUG) printf("i=%d exists!\n",i);
                                         entry = getEntry(circBuff,i);
                                         if(write(fd,entry->savedPDU+PAYLOAD_OFF,entry->pduLength-HDR_LEN)==-1)
                                         {
                                                 perror("write");
                                                 exit(EXIT_FAILURE);
                                         }
-                                        printf("WROTE2 %d\n",i);
+                                        if(DBUG) printf("WROTE2 %d\n",i);
                                         delEntry(circBuff,i); 
                                         *expRR = (*expRR) + 1;
                                 }
@@ -369,7 +353,7 @@ void handle_data(Endpoint *conn,Window *circBuff,uint8_t *dataPDU,int pduLength,
                                 /* missing packet, set expected rr to seq num of missing packet,send rr and srej, and exit the loop */
                                 else 
                                 {
-                                        printf("i=%d dne!\n",i);
+                                        if(DBUG) printf("i=%d dne!\n",i);
                                         *expRR = i;
                                         /*send_rr(conn,*expRR);*/
                                         send_srej(conn,*expRR);
@@ -379,47 +363,49 @@ void handle_data(Endpoint *conn,Window *circBuff,uint8_t *dataPDU,int pduLength,
                                 }
                         }
                         
+                        /* new "window" incoming */
                         if((*expRR) == ((*maxRR) + 1))
                         {
-                                printf("RESET SENT_SREJ!\n");
+                                if(DBUG) printf("RESET SENT_SREJ!\n");
                                 sent_srej = 0;
                                 send_rr(conn,*expRR);
                         }
                         else
                         {
-                                printf("expRR = %d does not match maxRR = %d! sent_srej = %d\n",*expRR,*maxRR,sent_srej);
+                                if(DBUG) printf("expRR = %d does not match maxRR = %d! sent_srej = %d\n",*expRR,*maxRR,sent_srej);
                         }
                         
                         if(host_seq_num > *maxRR) *maxRR = host_seq_num;
                 }
                 
-                printf("GOT EXPECTED RR = %d\n",*expRR);
+                if(DBUG) printf("GOT EXPECTED RR = %d\n",*expRR);
         }
         /* loss case: buffer data and possibly send SREJ */
         else if(host_seq_num > *expRR)
         {
-                printf("GOT %d, expected %d\n",host_seq_num,*expRR);
+                if(DBUG) printf("GOT %d, expected %d\n",host_seq_num,*expRR);
                 /* save the given packet */
                 addEntry(circBuff,dataPDU,pduLength,host_seq_num); 
                 /* send srej if not already done so for the window */
                 if(!sent_srej) 
                 {
-                        printf("SENDING SREJ = %d\n",*expRR);
+                        if(DBUG) printf("SENDING SREJ = %d\n",*expRR);
                         send_srej(conn,*expRR);
+                        sent_srej = 1;
                 }
                 else
                 {
-                        printf("UNABLE TO SEND SREJ = %d\n",*expRR);
+                        if(DBUG) printf("UNABLE TO SEND SREJ = %d\n",*expRR);
                 }
                 if(host_seq_num > *maxRR) *maxRR = host_seq_num;
         }
         /* previous RR was lost, just resend it to please the client */
         else
         {
-                printf("GOT LOWER RR = %d, expected = %d, sendu = %d\n",host_seq_num,*expRR,sent_srej);
+                if(DBUG) printf("GOT LOWER RR = %d, expected = %d, sendu = %d\n",host_seq_num,*expRR,sent_srej);
                 if((*maxRR) > (*expRR)) 
                 {
-                        printf("SENDY SREJ!\n");
+                        if(DBUG) printf("SENDY SREJ!\n");
                         send_srej(conn,*expRR);
                         sent_srej = 1;
                 }
@@ -427,6 +413,7 @@ void handle_data(Endpoint *conn,Window *circBuff,uint8_t *dataPDU,int pduLength,
         }
 }
 
+/* Sends EOF Ack to client if all data has been received. Returns 1 if all data packets have been received from client, 0 if not */
 int handle_eof(Endpoint *conn,uint32_t *expRR,uint32_t *maxRR)
 {
         uint8_t dummy[1];
@@ -437,7 +424,7 @@ int handle_eof(Endpoint *conn,uint32_t *expRR,uint32_t *maxRR)
         /* received all packets */
         if(*expRR > *maxRR || (*expRR == 0 && *maxRR == 0))
         {
-                printf("SENDING EOF ACK!\n");
+                if(DBUG) printf("SENDING EOF ACK!\n");
                 pduLength = createPDU(pduBuffer,0,F_EOF_ACK,dummy,0);
                 safeSendto(conn->socket,pduBuffer,pduLength,0,(struct sockaddr *)&conn->addr,sizeof(struct sockaddr_in6));
                 reallyDone = 1;
@@ -447,38 +434,35 @@ int handle_eof(Endpoint *conn,uint32_t *expRR,uint32_t *maxRR)
         return reallyDone;
 }
 
+/* Sends RR with given number to client */
 void send_rr(Endpoint *conn,uint32_t rr_num)
 {
         uint8_t pduBuffer[MAXBUF] = {0};
         int pduLength = -1;
         uint32_t net_rr_num = htonl(rr_num);
 
-        if(in_drop(rr_num))
-        {
-                fprintf(stderr,"%s%d\n","DROPPED RR ",rr_num);
-                rm_drop(rr_num);
-                return;
-        }
-
-        printf("SENDING RR %d\n",rr_num);
+        if(DBUG) printf("SENDING RR %d\n",rr_num);
         
         pduLength = createPDU(pduBuffer,0,F_RR,(uint8_t *)&net_rr_num,4);
         safeSendto(conn->socket,pduBuffer,pduLength,0,(struct sockaddr *)&conn->addr,sizeof(struct sockaddr_in6));
 }
 
+/* Sends SREJ with given number to client */
 void send_srej(Endpoint *conn,uint32_t seq_num)
 {
         uint8_t pduBuffer[MAXBUF] = {0};
         int pduLength = -1;
         uint32_t net_seq_num = htonl(seq_num);
         
-        if(in_drop(seq_num))
-        {
-                rm_drop(seq_num);
-                fprintf(stderr,"%s%d\n","DROPPED SREJ ",seq_num);
-                return;
-        }
-        
         pduLength = createPDU(pduBuffer,0,F_SREJ,(uint8_t *)&net_seq_num,4);
         safeSendto(conn->socket,pduBuffer,pduLength,0,(struct sockaddr *)&conn->addr,sizeof(struct sockaddr_in6));
+}
+
+/* simple function to handle child server processes */
+void handleZombies(int sig)
+{
+        int stat = 0;
+        while (waitpid(-1, &stat, WNOHANG) > 0)
+        {}
+
 }

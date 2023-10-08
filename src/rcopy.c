@@ -1,5 +1,4 @@
 // Client side - UDP Code				    
-// By Hugh Smith	4/1/2017		
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -27,9 +26,11 @@
 
 #define MAXBUF 1410 // technically max packet size if 1407
 #define MAXPAYLOAD 1400 // technically max packet size if 1407
-#define DBUG 1
+#define DBUG 0
 #define BUFF_BYTES 2 // need enough bytes to represent log2(1400) 
 #define WINDOW_BYTES 4// need enough bytes to represent log2(2^30)
+
+#define MAX_FILE_LEN 100
 
 /* input arg macros */
 #define IN_FROM_OFF 1
@@ -62,42 +63,6 @@ void handle_rr(int,Window *,uint8_t *,uint32_t *);
 void handle_srej(int,Window *,uint8_t *,struct sockaddr_in6 *);
 void handle_eof_ack(int,struct sockaddr_in6 *);
 
-/* custom drop functions -- delete later */
-int in_drop(uint32_t);
-int rm_drop(uint32_t);
-
-
-#if 1
-#define DROP_LEN 0
-uint32_t drop_dbug[] = {1};
-
-
-int in_drop(uint32_t seq)
-{
-        int i;
-        for(i=0;i<DROP_LEN;i++)
-        {
-                if(drop_dbug[i] == seq) return 1;
-        }
-
-        return 0;
-}
-
-int rm_drop(uint32_t seq)
-{
-        int i;
-        for(i=0;i<DROP_LEN;i++)
-        {
-                if(drop_dbug[i] == seq) 
-                {
-                        drop_dbug[i] = -1;
-                        return 1;
-                }
-        }
-
-        return 0;
-}
-#endif 
 
 int main (int argc, char *argv[])
  {
@@ -113,8 +78,10 @@ int main (int argc, char *argv[])
         int counter = 0;
         int fd = 0;
 	
-	portNumber = checkArgs(argc, argv);
+	/* check runtime args and get port number if they're valid */
+        portNumber = checkArgs(argc, argv);
 
+        /* parse runtime args */
         errorRate = atof(argv[IN_ERR_OFF]);
         
         if((windowSize = atoi(argv[IN_WIN_OFF])) <= 0)
@@ -134,15 +101,15 @@ int main (int argc, char *argv[])
         fromFile = argv[IN_FROM_OFF];
         toFile = argv[IN_TO_OFF];
 
-        if(strlen(toFile) > 255)
+        if(strlen(toFile) > MAX_FILE_LEN)
         {
-                fprintf(stderr,"Output file name length %d too long (max. 255)",(int)strlen(toFile));
+                fprintf(stderr,"Output file name length %d too long (max. %d)",(int)strlen(toFile),MAX_FILE_LEN);
                 exit(EXIT_FAILURE);
         }
 
         if(DBUG) 
         {
-                printf("ARGS: from = %s, to = %s, window = %d, buffer = %d, err = %.2f, host = %s, port = %d\n", fromFile, toFile, windowSize, bufferSize, errorRate, argv[IN_HOST_OFF], portNumber);
+                if(DBUG) printf("ARGS: from = %s, to = %s, window = %d, buffer = %d, err = %.2f, host = %s, port = %d\n", fromFile, toFile, windowSize, bufferSize, errorRate, argv[IN_HOST_OFF], portNumber);
         }
 
         /* args are good, start the setup */
@@ -153,14 +120,15 @@ int main (int argc, char *argv[])
                 exit(EXIT_FAILURE);
         }
 	
-	socketNum = setupUdpClientToServer(&server, argv[IN_HOST_OFF], portNumber);
+	/* setup structures to create connection */
+        socketNum = setupUdpClientToServer(&server, argv[IN_HOST_OFF], portNumber);
         setupPollSet();
         addToPollSet(socketNum);
 
 	
         sendErr_init(errorRate,DROP_ON,FLIP_ON,DEBUG_ON,RSEED_OFF);
 
-        /* setup phase */
+        /* setup phase -- send file request up to 10 times (exit if no response after 10 attempts) */
         while((counter < 10) && ((status = setupConnection(socketNum,toFile,windowSize,bufferSize, &server)) == TIMEOUT))
         {
                 close(socketNum);
@@ -186,7 +154,7 @@ int main (int argc, char *argv[])
         /*talkToServer(socketNum, &server);*/
 	
 	/* teardown */
-        printf("CLIENT TEARDOWN!\n");
+        if(DBUG) printf("CLIENT TEARDOWN!\n");
         close(fd);
         close(socketNum);
 
@@ -202,7 +170,7 @@ int setupConnection(int socketNum,char *toFile, uint32_t windowSize, uint16_t bu
         uint8_t responseBuffer[MAXBUF] = {0};
         uint8_t payloadBuffer[MAXPAYLOAD] = {0};
         uint8_t outfileLen = strlen(toFile);
-        printf("outfile = %s, len = %d\n",toFile,outfileLen);
+        if(DBUG) printf("outfile = %s, len = %d\n",toFile,outfileLen);
 	int serverAddrLen = sizeof(struct sockaddr_in6);
         
         uint16_t netBuffSize = htons(bufferSize);
@@ -215,7 +183,7 @@ int setupConnection(int socketNum,char *toFile, uint32_t windowSize, uint16_t bu
 
         pduLength = createPDU(pduBuffer,0,F_FILEREQ,payloadBuffer,payloadLen);
 
-        printf("outLen = %d, OUTPUT NAME in created pdu = %s\n",pduBuffer[13],pduBuffer+14);
+        if(DBUG) printf("outLen = %d, OUTPUT NAME in created pdu = %s\n",pduBuffer[13],pduBuffer+14);
         safeSendto(socketNum, pduBuffer, pduLength, 0, (struct sockaddr *) server, serverAddrLen);
 
         if(pollCall(1000) == -1)
@@ -224,7 +192,7 @@ int setupConnection(int socketNum,char *toFile, uint32_t windowSize, uint16_t bu
         }
         else
         {
-                printf("GOT A RESPONSE\n");
+                if(DBUG) printf("GOT A RESPONSE\n");
                 if(safeRecvfrom(socketNum,responseBuffer,MAXBUF,0,(struct sockaddr *)server,&serverAddrLen) == CRC_ERR)
                 {
                         if(DBUG) printf("CRC err\n");
@@ -262,7 +230,7 @@ void talkToServer(int socketNum, struct sockaddr_in6 * server)
 	{
 		dataLen = readFromStdin(buffer);
 
-		printf("Sending: %s with len: %d\n", buffer,dataLen);
+		if(DBUG) printf("Sending: %s with len: %d\n", buffer,dataLen);
 	
 		pduLength = createPDU((uint8_t *)pduBuffer,counter,92,(uint8_t *)buffer,dataLen);
                 counter += 1;
@@ -275,7 +243,7 @@ void talkToServer(int socketNum, struct sockaddr_in6 * server)
 		
 		// print out bytes received
 		ipString = ipAddressToString(server);
-		printf("Server with ip: %s and port %d said it received %s\n", ipString, ntohs(server->sin6_port), buffer);
+		if(DBUG) printf("Server with ip: %s and port %d said it received %s\n", ipString, ntohs(server->sin6_port), buffer);
 	      
 	}
 }
@@ -287,7 +255,7 @@ int readFromStdin(char * buffer)
 	
 	// Important you don't input more characters than you have space 
 	buffer[0] = '\0';
-	printf("Enter data: ");
+	if(DBUG) printf("Enter data: ");
 	while (inputLen < (MAXBUF - 1) && aChar != '\n')
 	{
 		aChar = getchar();
@@ -313,7 +281,7 @@ int checkArgs(int argc, char * argv[])
         /* check command line arguments  */
 	if (argc != 8)
 	{
-		printf("usage: %s from-filename to-filename window-size buffer-size error-percent remote-machine port-port\n", argv[0]);
+		fprintf(stderr,"usage: %s from-filename to-filename window-size buffer-size error-percent remote-machine port-port\n", argv[0]);
 		exit(1);
 	}
 	
@@ -322,6 +290,7 @@ int checkArgs(int argc, char * argv[])
 	return portNumber;
 }
 
+/* communicate w/server via SREJ protocol */
 void usePhase(int fd, int socket, int windowSize,int bufferSize,struct sockaddr_in6 *server)
 {
         uint8_t pduBuffer[MAXBUF] = {0};
@@ -337,6 +306,7 @@ void usePhase(int fd, int socket, int windowSize,int bufferSize,struct sockaddr_
         if(!(win = initWindow(windowSize)))
         {
                 fprintf(stderr,"%s\n","Init window");
+                return;
         }
 
         WBuff *entry = NULL;
@@ -344,15 +314,17 @@ void usePhase(int fd, int socket, int windowSize,int bufferSize,struct sockaddr_
         uint32_t maxRR = 0;
         int eof_counter = 0;
 
+        /* engage in data communication w/server until all data has been received by server (or client times out */
         while(status != DONE)
         {
+                /* send data while the window is open and we still have new data from the file */
                 while(windowOpen(win) && !reached_EOF)
                 {
-                        printf("FIRST LOOP!\n");
+                        if(DBUG) printf("FIRST LOOP!\n");
                         if(DBUG) printf("WINDOW OPEN, seq num = %d\n",getCurrent(win));
                         if((bytesRead = populatePayload(fd,payloadBuffer,bufferSize)) < bufferSize)
                         {
-                                printf("HIT EOG!\n");
+                                if(DBUG) printf("HIT EOG!\n");
                                 reached_EOF = 1;
                         }
                         if(bytesRead)
@@ -373,28 +345,32 @@ void usePhase(int fd, int socket, int windowSize,int bufferSize,struct sockaddr_
 
                         }
                         
+                        /* after sending a packet, check and handle any server messages */
                         while(pollCall(0) != -1)
                         {
                                 /* process server packet */
-                                printf("GOT A MSG!\n");
-                                printf("B4: Lower = %d, curr = %d, upper = %d, numItems = %d\n",getLower(win),getCurrent(win),getUpper(win),getNumItems(win));
+                                if(DBUG) printf("GOT A MSG!\n");
+                                if(DBUG) printf("B4: Lower = %d, curr = %d, upper = %d, numItems = %d\n",getLower(win),getCurrent(win),getUpper(win),getNumItems(win));
                                 processServerMsg(socket,win,server,serverPDU,&maxRR);
-                                printf("AFTER Lower = %d, curr = %d, upper = %d, numItems = %d\n",getLower(win),getCurrent(win),getUpper(win),getNumItems(win));
+                                if(DBUG) printf("AFTER Lower = %d, curr = %d, upper = %d, numItems = %d\n",getLower(win),getCurrent(win),getUpper(win),getNumItems(win));
                         }
                 }
 
                 if(DBUG) printf("EXITED OPEN WINDOW LOOP!\n");
                 
-                counter = 0;
+                counter = 0; /* used to indicate whether client has sent 10 unsuccessful packets to server, in which case client will quit */
 
-                printf("MAXRR = %d, seq_num-1 = %d\n",maxRR,getCurrent(win)-1);
-                printf("AFTER FIRST LOOP Lower = %d, curr = %d, upper = %d, numItems = %d\n",getLower(win),getCurrent(win),getUpper(win),getNumItems(win));
+                if(DBUG) printf("MAXRR = %d, seq_num-1 = %d\n",maxRR,getCurrent(win)-1);
+                if(DBUG) printf("AFTER FIRST LOOP Lower = %d, curr = %d, upper = %d, numItems = %d\n",getLower(win),getCurrent(win),getUpper(win),getNumItems(win));
+
+
+                /*if our window is closed or all data has been sent but not all data has been acknowledged by server, send lowest packet in the window until we receive a response (or quit after 10 tries) */
                 while(!windowOpen(win) || ((maxRR < (getCurrent(win))) && reached_EOF))
                 {
-                        printf("2nd LOOP! counter = %d\n",counter);
+                        if(DBUG) printf("2nd LOOP! counter = %d\n",counter);
                         if(counter == 10) 
                         {
-                                printf("Counter timed out!\n");
+                                if(DBUG) printf("Counter timed out!\n");
                                 return; /* failed to get a server response after 10 transmission attempts, quit*/
                         }
                         
@@ -409,7 +385,7 @@ void usePhase(int fd, int socket, int windowSize,int bufferSize,struct sockaddr_
                         /* else, resort to sending lowest packet */
                         else
                         {
-                                printf("POLLY TIMED OUT!\n");
+                                if(DBUG) printf("POLL TIMED OUT!\n");
                                 lowestSeq = getLower(win);
                                 if(DBUG) printf("lowest seq num = %d\n",lowestSeq);
                                 if(!(entry = getEntry(win,lowestSeq)))
@@ -430,10 +406,10 @@ void usePhase(int fd, int socket, int windowSize,int bufferSize,struct sockaddr_
                 {
                         if(eof_counter == 10) 
                         {
-                                printf("EOF COUNTER TIMED OUT!\n");
+                                if(DBUG) printf("EOF COUNTER TIMED OUT!\n");
                                 return;
                         }
-                        printf("REACHED EOF\n");
+                        if(DBUG) printf("REACHED EOF\n");
                         sendData(socket,pduBuffer,-1,payloadBuffer,0,server,0,F_EOF);
                         
                         /* check this with him */
@@ -446,11 +422,12 @@ void usePhase(int fd, int socket, int windowSize,int bufferSize,struct sockaddr_
                 }
         }
 
-        printf("STATUS = %d, DONE = %d,maxRR = %d,bytesRead = %d\n",status,DONE,maxRR,bytesRead);
+        if(DBUG) printf("STATUS = %d, DONE = %d,maxRR = %d,bytesRead = %d\n",status,DONE,maxRR,bytesRead);
         
         freeWindow(win);
 }
 
+/* fills the given buffer with the next sequence of bytes from the file */
 int populatePayload(int fd, uint8_t *payload,int bufferSize)
 {
         int bytesRead = 0;
@@ -465,6 +442,7 @@ int populatePayload(int fd, uint8_t *payload,int bufferSize)
         return bytesRead;
 }
 
+/* wrapper function to send data to server */
 int sendData(int socket, uint8_t *pduBuffer,int pduLength,uint8_t *payload,int payloadLength, struct sockaddr_in6 *server,uint32_t seq_num, uint8_t flag)
 {
         
@@ -472,18 +450,12 @@ int sendData(int socket, uint8_t *pduBuffer,int pduLength,uint8_t *payload,int p
 
         if(DBUG) printf("PDU length = %d\n",pduLength);
         
-        if(in_drop(seq_num)) 
-        {
-                fprintf(stderr,"%s%d\n","DROPPED PACKET ",seq_num);
-                rm_drop(seq_num);
-                return pduLength;
-        }
-        
         safeSendto(socket, pduBuffer, pduLength, 0, (struct sockaddr *) server, sizeof(struct sockaddr_in6));
 
         return pduLength;
 }
 
+/* handle RR and SREJ messages from server. This function carries out the rules of the SREJ protocol */
 int processServerMsg(int socket, Window *win, struct sockaddr_in6 *server, uint8_t *serverPDU,uint32_t *max_rr)
 {
         int serverAddrLen = sizeof(struct sockaddr_in6);
@@ -500,13 +472,13 @@ int processServerMsg(int socket, Window *win, struct sockaddr_in6 *server, uint8
         /* received RR from server */
         if(flag == F_RR)
         {
-                printf("RECEVED RR!\n");
+                if(DBUG) printf("RECEVED RR!\n");
                 handle_rr(socket,win,serverPDU,max_rr);
         }
         /* received SREJ from server */
         else if(flag == F_SREJ)
         {
-                printf("RECEVED SREJ!\n");
+                if(DBUG) printf("RECEVED SREJ!\n");
                 handle_srej(socket,win,serverPDU,server);
         }
         /* received EOF ACK from server */
@@ -518,6 +490,7 @@ int processServerMsg(int socket, Window *win, struct sockaddr_in6 *server, uint8
         return flag;
 }
 
+/* Appropriately respond to an RR from the server via SREJ protocol */
 void handle_rr(int socket,Window * win,uint8_t *serverPDU,uint32_t *maxRR)
 {
         uint32_t net_rr_num;
@@ -528,7 +501,7 @@ void handle_rr(int socket,Window * win,uint8_t *serverPDU,uint32_t *maxRR)
 
         int offset = host_rr_num - getLower(win);
 
-        printf("PRE RECVED RR = %d, lower = %d, offset = %d\n",host_rr_num,getLower(win),offset);
+        if(DBUG) printf("PRE RECVED RR = %d, lower = %d, offset = %d\n",host_rr_num,getLower(win),offset);
 
         if(host_rr_num > *maxRR)
         {
@@ -536,9 +509,10 @@ void handle_rr(int socket,Window * win,uint8_t *serverPDU,uint32_t *maxRR)
         }
 
         if(offset) slideWindow(win,offset);
-        printf("POST RECVED RR = %d, lower = %d, offset = %d\n",host_rr_num,getLower(win),offset);
+        if(DBUG) printf("POST RECVED RR = %d, lower = %d, offset = %d\n",host_rr_num,getLower(win),offset);
 }
 
+/* Appropriately respond to an SREJ from the server via SREJ protocol */
 void handle_srej(int socket,Window * win,uint8_t *serverPDU, struct sockaddr_in6 *server)
 {
         uint32_t net_srej_num = 0;
@@ -546,14 +520,15 @@ void handle_srej(int socket,Window * win,uint8_t *serverPDU, struct sockaddr_in6
         memcpy(&net_srej_num,serverPDU + PAYLOAD_OFF,4);
         host_srej_num = ntohl(net_srej_num);
         
-        printf("SREJ = %d\n",host_srej_num);
+        if(DBUG) printf("SREJ = %d\n",host_srej_num);
 
         WBuff *entry = getEntry(win,host_srej_num);
 
         sendData(socket,entry->savedPDU,entry->pduLength,NULL,0,server,host_srej_num,F_DATA);
-        printf("SREJ: SENT %d bytes!, seq num = %d vs actual = %d\n",entry->pduLength,entry->seq_num,host_srej_num);
+        if(DBUG) printf("SREJ: SENT %d bytes!, seq num = %d vs actual = %d\n",entry->pduLength,entry->seq_num,host_srej_num);
 }
 
+/* Since client has received EOF ACK from server, send the ACK to this EOF ACK -- this is the last packet sent from the client */
 void handle_eof_ack(int socket,struct sockaddr_in6 *server)
 {
         uint8_t pduBuffer[MAXBUF];

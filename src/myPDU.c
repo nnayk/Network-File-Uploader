@@ -15,7 +15,7 @@
 
 /* macros, if any */
 
-#define DBUG 1
+#define DBUG 0
 
 /* function prototypes */
 
@@ -33,7 +33,6 @@ int createPDU(uint8_t * pduBuffer, uint32_t sequenceNumber, uint8_t flag, uint8_
         memset(pduBuffer+CRC_OFF,0,CRC_SIZE);
 
         if(DBUG) printf("pduLength = %d\n",pduLength);
-
         checksum = in_cksum((unsigned short *)pduBuffer,pduLength);
         memcpy(pduBuffer + CRC_OFF,&checksum,2);
         
