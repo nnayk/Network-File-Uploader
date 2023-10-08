@@ -1,4 +1,10 @@
-/* Server side - UDP Code				    */
+/* 
+ * Nakul Nayak
+ * CPE 464
+ * Description:
+ This file contains the server side code to listen for client connections and enable capability
+ to process data from these clients simultaneously following selective reject (SREJ) protocol.
+ */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -27,7 +33,7 @@
 #define MAXBUF 1410
 #define DBUG 0
 
-void processClient(int socketNum);
+/* function prototypes */
 int checkArgs(int argc, char *argv[]);
 int handle_file_req(Endpoint,uint8_t *,uint32_t *, uint16_t *,int);
 void send_file_response(Endpoint,uint8_t);
@@ -46,31 +52,24 @@ int main ( int argc, char *argv[]  )
         int socketNum = 0;				
 	int portNumber = 0;
         double errorRate = 0.0;
-
         /* stores data for the file request PDU from client */
         uint8_t fileReqBuffer[MAXBUF];
         int pduLength = 0;
-
         pid_t pid; 
 	struct sockaddr_in6 client;		
 	int clientAddrLen = sizeof(client);	
         uint16_t bufferSize;
         uint32_t windowSize;
-
 	/* make sure args are valid */
         portNumber = checkArgs(argc, argv);
-        
         errorRate = atof(argv[1]);
         if(DBUG) printf("Given error rate %.2f\n",errorRate); 
-		
 	socketNum = udpServerSetup(portNumber);
-        
         /* setup structures to manage the connection(s) */
         sendErr_init(errorRate,DROP_ON,FLIP_ON,DEBUG_ON,RSEED_OFF);
         setupPollSet();
         addToPollSet(socketNum);
         signal(SIGCHLD, handleZombies);
-
         /* accept new clients and communicate w/them via child processes */
         while(1)
         {
@@ -78,7 +77,6 @@ int main ( int argc, char *argv[]  )
                 {
                         continue; /* packet is corrupted, ignore it */
                 }
-		
                 if(DBUG) printf("RECV %d bytes\n",pduLength);
                 /* child exits loop */
                 if(!(pid=fork()))
@@ -92,26 +90,21 @@ int main ( int argc, char *argv[]  )
                         exit(2);
                 }
         }
-
-        /* child process -- setup, use, teardown phases to connect  with client */
+        /* child process -- setup, use, teardown phase to connect with client */
         if(pid==0)
         {
                 int fd = 0;
                 Endpoint childConn;
                 childConn.addr = client;
-
                 removeFromPollSet(socketNum);
                 close(socketNum);
-
                 /* setup phase */
                 if((childConn.socket = socket(AF_INET6,SOCK_DGRAM,0)) == -1)
                 {
                         perror("socket");
                         exit(-2);
                 }
-
                 addToPollSet(childConn.socket);
-
                 /* send file reject packet */
                 if((fd = handle_file_req(childConn,fileReqBuffer,&windowSize,&bufferSize,pduLength))==-1)
                 {
@@ -124,22 +117,27 @@ int main ( int argc, char *argv[]  )
                 {
                         send_file_response(childConn,FILE_OK);
                 }
-                
                 /* use phase */
                 serverUsePhase(fd,&childConn,windowSize,bufferSize);
-                
                 /* teardown phase */
                 if(DBUG) printf("SERVER TEARDOWN!\n");
                 close(fd);
                 close(childConn.socket);
         }
-
         else close(socketNum);
-	
 	return 0;
 }
 
-/* returns 1 if file OK, -1 if not able to open file */
+/**
+ * Handle client reuquest to upload a file.
+ * @param childConn: connection info for the client
+ * @param buffer: the buffer to store the file request PDU
+ * @param windowSize: the window size to use for the connection
+ * @param bufferSize: the buffer size for future PDU message data from this client
+ * @param pduLength: the length of the file request PDU
+ * @return: 1 for request approval, -1 for rejection (specifically, server is unable
+ * to open the requested output file)
+*/
 int handle_file_req(Endpoint childConn,uint8_t *buffer,uint32_t *windowSize,uint16_t *bufferSize,int pduLength)
 {
         char filename[MAX_FILE_SIZE] = {0};
@@ -148,27 +146,26 @@ int handle_file_req(Endpoint childConn,uint8_t *buffer,uint32_t *windowSize,uint
         uint32_t netWindowSize = 0;
         uint16_t netBufferSize = 0;
 
+        /* process and store the file request PDU data */
         memcpy(filename,buffer+PAYLOAD_OFF+OUT_FILE_OFF_7,filenameLen);
-
         memcpy(&netBufferSize,buffer+PAYLOAD_OFF+BUFF_SIZE_OFF_7,2);
         *bufferSize = ntohs(netBufferSize);
-
         memcpy(&netWindowSize,buffer+PAYLOAD_OFF+WINDOW_SIZE_OFF_7,4);
         *windowSize = ntohl(netWindowSize);
-
-
         if(DBUG) printf("SERVER GOT FILENAME OUTPUT %s, len = %ld,windowSize = %d, bufferSize = %d\n",filename,strlen(filename),*windowSize,*bufferSize);
-
         if((fd = open(filename, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP)) == -1)
         {
                 perror("open");
                 return -1;
         }
-
         return fd;
 }
 
-/* either approve or reject client file request */
+/**
+ * Approve or reject the client file request.
+ * @param childConn: connection info for the client
+ * @param status: the status to send back to the client
+*/
 void send_file_response(Endpoint childConn, uint8_t status)
 {
         uint8_t pduBuffer[MAXBUF] = {0};
@@ -177,33 +174,14 @@ void send_file_response(Endpoint childConn, uint8_t status)
         safeSendto(childConn.socket,pduBuffer,pduLength, 0, (struct sockaddr *)&childConn.addr,sizeof(struct sockaddr_in6));
 }
 
-void processClient(int socketNum)
-{
-	int dataLen = 0; 
-	char buffer[MAXBUF + 1];	  
-	struct sockaddr_in6 client;		
-	int clientAddrLen = sizeof(client);	
-	
-	buffer[0] = '\0';
-	while (buffer[0] != '.')
-	{
-		dataLen = safeRecvfrom(socketNum, buffer, MAXBUF, 0, (struct sockaddr *) &client, &clientAddrLen);
-	
-		if(DBUG) printf("Received message from client with ");
-		printIPInfo(&client);
-		if(DBUG) printf(" Len: %d \'%s\'\n", dataLen, buffer+7);
-
-		// just for fun send back to client number of bytes received
-		sprintf(buffer, "bytes: %d", dataLen);
-		//safeSendto(socketNum, buffer, strlen(buffer)+1, 0, (struct sockaddr *) & client, clientAddrLen);
-
-	}
-}
-
-/* utility function that checks runtime args. Returns port number if args are valid, else terminates process */
+/**
+ * Check runtime args. Returns port number if args are valid, else terminates process 
+ * @param argc: number of runtime args
+ * @param argv: runtime args
+ * @return: port number to use for server
+*/
 int checkArgs(int argc, char *argv[])
 {
-	// Checks args and returns port number
 	int portNumber = 0;
 
 	if (argc > 3 || argc < 2)
@@ -211,16 +189,18 @@ int checkArgs(int argc, char *argv[])
 		fprintf(stderr, "Usage %s [error rate] [optional port number]\n", argv[0]);
 		exit(-1);
 	}
-	
-	if (argc == 3)
-	{
-		portNumber = atoi(argv[2]);
-	}
-	
+	if (argc == 3) portNumber = atoi(argv[2]);
 	return portNumber;
 }
 
 /* facilitates actual exchange of packets view SREJ protocol */
+/**
+ * Wrapper function to listen for and process client messages.
+ * @param fd: the file descriptor to write the received data to
+ * @param conn: the connection info for the client
+ * @param windowSize: the window size to use for the connection
+ * @param bufferSize: the buffer size for the PDU message data
+*/
 void serverUsePhase(int fd,Endpoint *conn,uint32_t windowSize,uint16_t bufferSize)
 {
         int clientFlag = -1;
@@ -231,7 +211,6 @@ void serverUsePhase(int fd,Endpoint *conn,uint32_t windowSize,uint16_t bufferSiz
 
         setupPollSet();
         addToPollSet(conn->socket);
-
         /* loop indefinitely and accept client packets. Exit once the EOF Ack from client is received or server times out */
         while(1)
         {
@@ -240,32 +219,36 @@ void serverUsePhase(int fd,Endpoint *conn,uint32_t windowSize,uint16_t bufferSiz
                         fprintf(stderr,"%s\n","No message from client after 10 seconds, exiting");
                         break;
                 }
-
+                /* received flag to close connection from client */
                 if((clientFlag = processClientMsg(fd,conn,circBuff,clientPDU,&expRR,&maxRR,bufferSize)) == F_EOF_ACK_2)
                 {
                         break;
                 }
         }
-
+        /* free up allocated resources */
         freeWindow(circBuff);
 }
 
-/* given a PDU, drops it if there's a CRC error, else sends an appropriate RR and/or SREJ. Returns the flag of the client PDU.*/
+/**
+ * Given a PDU, drop it if there's a CRC error, else send an appropriate RR and/or SREJ to the client.
+ * @param fd: the file descriptor to write the received data to
+ * @param conn: the connection info for the client
+ * @param windowSize: the window size to use for the connection
+ * @param bufferSize: the buffer size for the PDU message data
+ * @return: Flag of the client PDU
+*/
 int processClientMsg(int fd,Endpoint *conn,Window *circBuff,uint8_t *clientPDU,uint32_t *expRR, uint32_t *maxRR,int bufferSize)
 {
         int clientAddrLen = sizeof(struct sockaddr_in6);
         int flag = -1;
         int pduLength = 0;
-
         
         if((pduLength = safeRecvfrom(conn->socket,clientPDU,1410,0,(struct sockaddr *)&conn->addr,&clientAddrLen)) == CRC_ERR)
         {
                 if(DBUG) printf("CRC err\n");
                 return -1; /* pretend like we didn't receive a packet if there's a CRC error */
         }
- 
         flag = clientPDU[FLAG_OFF];
-        
         if(DBUG) printf("CLIENT FLAG = %d\n",flag);
         /* received data from client */
         if(flag == F_DATA)
@@ -279,13 +262,20 @@ int processClientMsg(int fd,Endpoint *conn,Window *circBuff,uint8_t *clientPDU,u
                 if(DBUG) printf("GONNA HANDLE EOF!\n");
                 handle_eof(conn,expRR,maxRR);
         }
-
         /* else received EOF ACK 2 from client, just return the flag and teardown phase will begin */
-
         return flag;
 }
 
-/* takes care of data packets received from client. Decides what packet(s) to send back */
+/**
+ * Take care of data packets received from client. Decide and send appropriate packet(s) response to client.
+ * @param conn: the connection info for the client
+ * @param circBuff: the window buffer to store data packets in
+ * @param dataPDU: the data PDU received from the client
+ * @param pduLength: the length of the data PDU
+ * @param expRR: the expected RR number
+ * @param maxRR: the maximum RR number sent so far
+ * @param fd: the file descriptor to write the received data to
+*/
 void handle_data(Endpoint *conn,Window *circBuff,uint8_t *dataPDU,int pduLength,uint32_t *expRR,uint32_t *maxRR,int fd)
 {
         uint32_t network_seq_num = 0;
@@ -295,21 +285,15 @@ void handle_data(Endpoint *conn,Window *circBuff,uint8_t *dataPDU,int pduLength,
         WBuff *entry = NULL;
 
         memcpy(&network_seq_num,dataPDU+SEQ_OFF,SEQ_NUM_SIZE);
-
         int payloadLength = pduLength - HDR_LEN;
-
         host_seq_num = ntohl(network_seq_num);
-
         if(DBUG) printf("HOST SEQ NUM = %d, expexted = %d, max = %d,payload length = %d\n",host_seq_num,*expRR,*maxRR,payloadLength);
-
-
         /* no loss case: got the expected sequence number, send RR */
         if(host_seq_num == *expRR)
         {
                 /* received a packet w/highest sequence number so far */
                 if(host_seq_num >= *maxRR) 
-                {
-                        
+                {   
                         *maxRR = host_seq_num;
                         if(DBUG) printf("BEFORE expr = %d\n",*expRR);
                         *(expRR) = *(expRR) + 1;
@@ -320,13 +304,11 @@ void handle_data(Endpoint *conn,Window *circBuff,uint8_t *dataPDU,int pduLength,
                                 perror("write");
                                 exit(EXIT_FAILURE);
                         }
-
                         if(DBUG)
                         {
                                 printf("WROTE1 %d\n",host_seq_num);
                         }
                 }
-                
                 /* received a packet that was previously lost and resent by client */
                 else
                 {
@@ -348,7 +330,6 @@ void handle_data(Endpoint *conn,Window *circBuff,uint8_t *dataPDU,int pduLength,
                                         delEntry(circBuff,i); 
                                         *expRR = (*expRR) + 1;
                                 }
-                                
                                 /* missing packet, set expected rr to seq num of missing packet,send rr and srej, and exit the loop */
                                 else 
                                 {
@@ -361,7 +342,6 @@ void handle_data(Endpoint *conn,Window *circBuff,uint8_t *dataPDU,int pduLength,
                                         break;
                                 }
                         }
-                        
                         /* new "window" incoming */
                         if((*expRR) == ((*maxRR) + 1))
                         {
@@ -373,10 +353,8 @@ void handle_data(Endpoint *conn,Window *circBuff,uint8_t *dataPDU,int pduLength,
                         {
                                 if(DBUG) printf("expRR = %d does not match maxRR = %d! sent_srej = %d\n",*expRR,*maxRR,sent_srej);
                         }
-                        
                         if(host_seq_num > *maxRR) *maxRR = host_seq_num;
                 }
-                
                 if(DBUG) printf("GOT EXPECTED RR = %d\n",*expRR);
         }
         /* loss case: buffer data and possibly send SREJ */
@@ -412,7 +390,13 @@ void handle_data(Endpoint *conn,Window *circBuff,uint8_t *dataPDU,int pduLength,
         }
 }
 
-/* Sends EOF Ack to client if all data has been received. Returns 1 if all data packets have been received from client, 0 if not */
+/**
+ * Send EOF Ack to client if all data has been received.
+ * @param conn: the connection info for the client
+ * @param expRR: the expected RR number
+ * @param maxRR: the maximum RR number received so far
+ * @return: 1 if all data packets have been received from client, 0 if not.
+*/
 int handle_eof(Endpoint *conn,uint32_t *expRR,uint32_t *maxRR)
 {
         uint8_t dummy[1];
@@ -433,7 +417,11 @@ int handle_eof(Endpoint *conn,uint32_t *expRR,uint32_t *maxRR)
         return reallyDone;
 }
 
-/* Sends RR with given number to client */
+/**
+ * Send RR with given number to client .
+ * @param conn: the connection info for the client
+ * @param rr_num: the RR number to send
+*/
 void send_rr(Endpoint *conn,uint32_t rr_num)
 {
         uint8_t pduBuffer[MAXBUF] = {0};
@@ -441,12 +429,15 @@ void send_rr(Endpoint *conn,uint32_t rr_num)
         uint32_t net_rr_num = htonl(rr_num);
 
         if(DBUG) printf("SENDING RR %d\n",rr_num);
-        
         pduLength = createPDU(pduBuffer,0,F_RR,(uint8_t *)&net_rr_num,4);
         safeSendto(conn->socket,pduBuffer,pduLength,0,(struct sockaddr *)&conn->addr,sizeof(struct sockaddr_in6));
 }
 
-/* Sends SREJ with given number to client */
+/**
+ * Send SREJ with given number to client .
+ * @param conn: the connection info for the client
+ * @param seq_num: the seq. number to send
+*/
 void send_srej(Endpoint *conn,uint32_t seq_num)
 {
         uint8_t pduBuffer[MAXBUF] = {0};
@@ -457,7 +448,10 @@ void send_srej(Endpoint *conn,uint32_t seq_num)
         safeSendto(conn->socket,pduBuffer,pduLength,0,(struct sockaddr *)&conn->addr,sizeof(struct sockaddr_in6));
 }
 
-/* simple function to handle child server processes */
+/**
+ * Handle child server processes that have terminated.
+ * @param sig: the signal that was received (should always be SIGCHLD)
+*/
 void handleZombies(int sig)
 {
         int stat = 0;
