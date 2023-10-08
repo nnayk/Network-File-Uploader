@@ -2,7 +2,8 @@
  * Nakul Nayak
  * CPE 464
  * Description:
- This file contains the client side code
+ This file contains the client side code to setup, use, and teardown a connection with a server
+ following selective reject (SREJ) flow control protocol.
  */
 			    
 #include <stdio.h>
