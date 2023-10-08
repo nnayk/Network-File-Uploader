@@ -189,7 +189,6 @@ void processClient(int socketNum)
 	{
 		dataLen = safeRecvfrom(socketNum, buffer, MAXBUF, 0, (struct sockaddr *) &client, &clientAddrLen);
 	
-                printPDU((uint8_t *)buffer,dataLen);
 		if(DBUG) printf("Received message from client with ");
 		printIPInfo(&client);
 		if(DBUG) printf(" Len: %d \'%s\'\n", dataLen, buffer+7);
