@@ -255,7 +255,7 @@ void usePhase(int fd, int socket, int windowSize,int bufferSize,struct sockaddr_
                 /* send data while the window is open and we still have new data from the file */
                 while(windowOpen(win) && !reached_EOF)
                 {
-                        /* populare the buffer with the next chunk of file data */
+                        /* populate the buffer with the next chunk of file data */
                         if((bytesRead = populatePayload(fd,payloadBuffer,bufferSize)) < bufferSize)
                         {
                                 reached_EOF = 1;
@@ -315,7 +315,6 @@ void usePhase(int fd, int socket, int windowSize,int bufferSize,struct sockaddr_
                                 return;
                         }
                         sendData(socket,pduBuffer,-1,payloadBuffer,0,server,0,F_EOF);
-                        /* check this with him */
                         if(pollCall(1000) != -1)
                         {
                                 if((processServerMsg(socket,win,server,serverPDU,&maxRR)) == F_EOF_ACK)
