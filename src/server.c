@@ -63,7 +63,6 @@ int main ( int argc, char *argv[]  )
 	/* make sure args are valid */
         portNumber = checkArgs(argc, argv);
         errorRate = atof(argv[1]);
-        if(DBUG) printf("Given error rate %.2f\n",errorRate); 
 	socketNum = udpServerSetup(portNumber);
         /* setup structures to manage the connection(s) */
         sendErr_init(errorRate,DROP_ON,FLIP_ON,DEBUG_ON,RSEED_OFF);
@@ -77,11 +76,9 @@ int main ( int argc, char *argv[]  )
                 {
                         continue; /* packet is corrupted, ignore it */
                 }
-                if(DBUG) printf("RECV %d bytes\n",pduLength);
                 /* child exits loop */
                 if(!(pid=fork()))
                 {
-                        if(DBUG) printf("FORKED!\n");
                         break;
                 }
                 else if(pid == -1)
@@ -120,7 +117,6 @@ int main ( int argc, char *argv[]  )
                 /* use phase */
                 serverUsePhase(fd,&childConn,windowSize,bufferSize);
                 /* teardown phase */
-                if(DBUG) printf("SERVER TEARDOWN!\n");
                 close(fd);
                 close(childConn.socket);
         }
@@ -152,7 +148,6 @@ int handle_file_req(Endpoint childConn,uint8_t *buffer,uint32_t *windowSize,uint
         *bufferSize = ntohs(netBufferSize);
         memcpy(&netWindowSize,buffer+PAYLOAD_OFF+WINDOW_SIZE_OFF_7,4);
         *windowSize = ntohl(netWindowSize);
-        if(DBUG) printf("SERVER GOT FILENAME OUTPUT %s, len = %ld,windowSize = %d, bufferSize = %d\n",filename,strlen(filename),*windowSize,*bufferSize);
         if((fd = open(filename, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP)) == -1)
         {
                 perror("open");
@@ -245,21 +240,17 @@ int processClientMsg(int fd,Endpoint *conn,Window *circBuff,uint8_t *clientPDU,u
         
         if((pduLength = safeRecvfrom(conn->socket,clientPDU,1410,0,(struct sockaddr *)&conn->addr,&clientAddrLen)) == CRC_ERR)
         {
-                if(DBUG) printf("CRC err\n");
                 return -1; /* pretend like we didn't receive a packet if there's a CRC error */
         }
         flag = clientPDU[FLAG_OFF];
-        if(DBUG) printf("CLIENT FLAG = %d\n",flag);
         /* received data from client */
         if(flag == F_DATA)
         {
-                if(DBUG) printf("GONNA HANDLE DATA\n");
                 handle_data(conn,circBuff,clientPDU,pduLength,expRR,maxRR,fd);
         }
         /* received EOF from client */
         else if(flag == F_EOF)
         {
-                if(DBUG) printf("GONNA HANDLE EOF!\n");
                 handle_eof(conn,expRR,maxRR);
         }
         /* else received EOF ACK 2 from client, just return the flag and teardown phase will begin */
@@ -287,7 +278,6 @@ void handle_data(Endpoint *conn,Window *circBuff,uint8_t *dataPDU,int pduLength,
         memcpy(&network_seq_num,dataPDU+SEQ_OFF,SEQ_NUM_SIZE);
         int payloadLength = pduLength - HDR_LEN;
         host_seq_num = ntohl(network_seq_num);
-        if(DBUG) printf("HOST SEQ NUM = %d, expexted = %d, max = %d,payload length = %d\n",host_seq_num,*expRR,*maxRR,payloadLength);
         /* no loss case: got the expected sequence number, send RR */
         if(host_seq_num == *expRR)
         {
@@ -295,18 +285,12 @@ void handle_data(Endpoint *conn,Window *circBuff,uint8_t *dataPDU,int pduLength,
                 if(host_seq_num >= *maxRR) 
                 {   
                         *maxRR = host_seq_num;
-                        if(DBUG) printf("BEFORE expr = %d\n",*expRR);
                         *(expRR) = *(expRR) + 1;
-                        if(DBUG) printf("NEW EXPRR = %d\n",*expRR);
                         send_rr(conn,*expRR);
                         if(write(fd,dataPDU+PAYLOAD_OFF,payloadLength)==-1)
                         {
                                 perror("write");
                                 exit(EXIT_FAILURE);
-                        }
-                        if(DBUG)
-                        {
-                                printf("WROTE1 %d\n",host_seq_num);
                         }
                 }
                 /* received a packet that was previously lost and resent by client */
@@ -315,25 +299,21 @@ void handle_data(Endpoint *conn,Window *circBuff,uint8_t *dataPDU,int pduLength,
                         addEntry(circBuff,dataPDU,pduLength,*expRR);
                         for(i=*expRR;i<=(*maxRR);i++)
                         {
-                                if(DBUG) printf("INSIDE LOOP: i = %d, expRR = %d, maxRR = %d\n",i,*expRR,*maxRR);
                                 /* already buffered a packet, write it to the file and increment expected rr */
                                 if(existsEntry(circBuff,i)) 
                                 {
-                                        if(DBUG) printf("i=%d exists!\n",i);
                                         entry = getEntry(circBuff,i);
                                         if(write(fd,entry->savedPDU+PAYLOAD_OFF,entry->pduLength-HDR_LEN)==-1)
                                         {
                                                 perror("write");
                                                 exit(EXIT_FAILURE);
                                         }
-                                        if(DBUG) printf("WROTE2 %d\n",i);
                                         delEntry(circBuff,i); 
                                         *expRR = (*expRR) + 1;
                                 }
                                 /* missing packet, set expected rr to seq num of missing packet,send rr and srej, and exit the loop */
                                 else 
                                 {
-                                        if(DBUG) printf("i=%d dne!\n",i);
                                         *expRR = i;
                                         /*send_rr(conn,*expRR);*/
                                         send_srej(conn,*expRR);
@@ -345,44 +325,30 @@ void handle_data(Endpoint *conn,Window *circBuff,uint8_t *dataPDU,int pduLength,
                         /* new "window" incoming */
                         if((*expRR) == ((*maxRR) + 1))
                         {
-                                if(DBUG) printf("RESET SENT_SREJ!\n");
                                 sent_srej = 0;
                                 send_rr(conn,*expRR);
                         }
-                        else
-                        {
-                                if(DBUG) printf("expRR = %d does not match maxRR = %d! sent_srej = %d\n",*expRR,*maxRR,sent_srej);
-                        }
                         if(host_seq_num > *maxRR) *maxRR = host_seq_num;
                 }
-                if(DBUG) printf("GOT EXPECTED RR = %d\n",*expRR);
         }
         /* loss case: buffer data and possibly send SREJ */
         else if(host_seq_num > *expRR)
         {
-                if(DBUG) printf("GOT %d, expected %d\n",host_seq_num,*expRR);
                 /* save the given packet */
                 addEntry(circBuff,dataPDU,pduLength,host_seq_num); 
                 /* send srej if not already done so for the window */
                 if(!sent_srej) 
                 {
-                        if(DBUG) printf("SENDING SREJ = %d\n",*expRR);
                         send_srej(conn,*expRR);
                         sent_srej = 1;
-                }
-                else
-                {
-                        if(DBUG) printf("UNABLE TO SEND SREJ = %d\n",*expRR);
                 }
                 if(host_seq_num > *maxRR) *maxRR = host_seq_num;
         }
         /* previous RR was lost, just resend it to please the client */
         else
         {
-                if(DBUG) printf("GOT LOWER RR = %d, expected = %d, sendu = %d\n",host_seq_num,*expRR,sent_srej);
                 if((*maxRR) > (*expRR)) 
                 {
-                        if(DBUG) printf("SENDY SREJ!\n");
                         send_srej(conn,*expRR);
                         sent_srej = 1;
                 }
@@ -407,7 +373,6 @@ int handle_eof(Endpoint *conn,uint32_t *expRR,uint32_t *maxRR)
         /* received all packets */
         if(*expRR > *maxRR || (*expRR == 0 && *maxRR == 0))
         {
-                if(DBUG) printf("SENDING EOF ACK!\n");
                 pduLength = createPDU(pduBuffer,0,F_EOF_ACK,dummy,0);
                 safeSendto(conn->socket,pduBuffer,pduLength,0,(struct sockaddr *)&conn->addr,sizeof(struct sockaddr_in6));
                 reallyDone = 1;
@@ -428,7 +393,6 @@ void send_rr(Endpoint *conn,uint32_t rr_num)
         int pduLength = -1;
         uint32_t net_rr_num = htonl(rr_num);
 
-        if(DBUG) printf("SENDING RR %d\n",rr_num);
         pduLength = createPDU(pduBuffer,0,F_RR,(uint8_t *)&net_rr_num,4);
         safeSendto(conn->socket,pduBuffer,pduLength,0,(struct sockaddr *)&conn->addr,sizeof(struct sockaddr_in6));
 }
