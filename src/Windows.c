@@ -20,8 +20,11 @@
 /* function prototypes */
 Window *argCheck(Window *);
 
-/* global vars, if any */
-
+/**
+ * Initialize the window structure.
+ * @param capacity: the capacity of the window
+ * @return: a pointer to the window structure
+*/
 Window *initWindow(int capacity)
 {
         int i;
@@ -33,6 +36,7 @@ Window *initWindow(int capacity)
         win->upper = capacity;
         win->pduBuff = (WBuff **)sCalloc(capacity,sizeof(WBuff *));
         
+        /* create an empty entry for each window slot */
         for(i=0;i<capacity;i++)
         {
                 win->pduBuff[i] = (WBuff *)sCalloc(1,sizeof(WBuff));
@@ -40,27 +44,52 @@ Window *initWindow(int capacity)
         return win;
 }
 
+/**
+ * Retrieve number of occupied window slots.
+ * @param win: a pointer to the window structure
+ * @return: the number of occupied window slots
+*/
 int getNumItems(Window *win)
 {
         return win->numItems;
 }
 
-
+/**
+ * Retrieve lower bound sequence number of window.
+ * @param win: a pointer to the window structure
+ * @return: the lower bound sequence number of the window
+*/
 int getLower(Window *win)
 {
         return win->lower;
 }
 
+/**
+ * Retrieve current index of the window.
+ * @param win: a pointer to the window structure
+ * @return: the current index of the window
+*/
 int getCurrent(Window *win)
 {
         return win->current;
 }
 
+/**
+ * Retrieve upper bound sequence number of the window.
+ * @param win: a pointer to the window structure
+ * @return: the upper bound sequence number of the window
+*/
 int getUpper(Window *win)
 {
         return win->upper;
 }
 
+/**
+ * Slide the window the given number of increments.
+ * @param win: a pointer to the window structure
+ * @param offset: the number of increments to slide the window
+ * @return: 1 on success
+*/
 int slideWindow(Window *win, int offset)
 {
         int i;
@@ -78,6 +107,12 @@ int slideWindow(Window *win, int offset)
         return 1;
 }
 
+/**
+ * Shift current index of the window.
+ * @param win: a pointer to the window structure
+ * @param offset: the number of increments to shift the current index
+ * @return: the upper bound sequence number of the window
+*/
 int shiftCurrent(Window *win, int offset)
 {
         if(!argCheck(win)) return 0;
@@ -85,35 +120,49 @@ int shiftCurrent(Window *win, int offset)
         return 1;
 }
 
+/**
+ * Add a new entry to the window.
+ * @param win: a pointer to the window structure
+ * @param pduBuffer: the pdu buffer to add to the window
+ * @param pduLength: the length of the pdu buffer
+ * @param seq_num: the sequence number of the pdu buffer
+ * @return: 1 on success
+*/
 int addEntry(Window *win, uint8_t *pduBuffer, int pduLength, int seq_num)
 {
         if(!argCheck(win) || !pduBuffer) return 0;
         int index = getIndex(win,seq_num);
-        if(DBUG) printf("Index to add in window = %dn",index);
         if(index >= win->capacity)
         {
                 if(DBUG) fprintf(stderr,"%s\n","Index out of bounds!");
                 return -1;
         }
+        /* simple error check */
         if(win->pduBuff[index] && win->pduBuff[index]->filled)
         {
                 if(win->pduBuff[index]->seq_num != seq_num)
                 {
                         fprintf(stderr,"Bug with window! Trying to add seq num = %d even though %d is at that spot!\n",seq_num,win->pduBuff[index]->seq_num);
+                        exit(EXIT_FAILURE);
                 }
         }
         memcpy(win->pduBuff[index]->savedPDU, pduBuffer, pduLength);
+        /* populate the entry */
         win->pduBuff[index]->seq_num = seq_num;
         win->pduBuff[index]->pduLength = pduLength;
         win->pduBuff[index]->filled = 1;
         if(in_cksum((unsigned short *)pduBuffer,pduLength))
-                fprintf(stderr,"%s","HUHHHHHHH? CHECKSUM MI\n");
-        if(in_cksum((unsigned short *)win->pduBuff[index]->savedPDU,win->pduBuff[index]->pduLength))
-                fprintf(stderr,"%s","CHECKSUM MISAMTCH IN WINDOWS!!!\n");
+                fprintf(stderr,"%s","addEntry: CHECKSUM MISMATCH IN WINDOW!!!\n");
         win->numItems++;
         return 1;
 }
 
+/**
+ * Delete a specifc entry in the window.
+ * @param win: a pointer to the window structure
+ * @param seq_num: the sequence number of the pdu buffer to delete
+ * @return: 1 on success, 0 on failure
+*/
 int delEntry(Window *win, int seq_num)
 {
         if(!argCheck(win)) return 0;   
@@ -137,6 +186,12 @@ int delEntry(Window *win, int seq_num)
         return 1;
 }
 
+/**
+ * Get a specifc entry in the window.
+ * @param win: a pointer to the window structure
+ * @param seq_num: the sequence number of the window buffer entry to get
+ * @return: a pointer to the window buffer entry
+*/
 WBuff *getEntry(Window *win, int seq_num)
 {
         if(!argCheck(win)) return NULL;
@@ -144,6 +199,12 @@ WBuff *getEntry(Window *win, int seq_num)
         return win->pduBuff[index];
 }
 
+/**
+ * Determine whether an entry exists in the window.
+ * @param win: a pointer to the window structure
+ * @param seq_num: the sequence number of the window buffer entry to check
+ * @return: True if the entry exists, False otherwise
+*/
 int existsEntry(Window *win,int seq_num)
 {
         WBuff *entry = getEntry(win,seq_num);
@@ -155,6 +216,12 @@ int existsEntry(Window *win,int seq_num)
         return 1;
 }
 
+/**
+ * Get a specifc PDU for a window buffer entry.
+ * @param win: a pointer to the window structure
+ * @param index: the index of the window buffer entry to get
+ * @return: a pointer to the PDU in the window buffer entry
+*/
 WBuff *getSavedPDU(Window *win, int index)
 {
         if(!win->pduBuff[index])
@@ -165,12 +232,23 @@ WBuff *getSavedPDU(Window *win, int index)
         return win->pduBuff[index];
 }
 
+/**
+ * Get the window buffer entry index for a given sequence number
+ * @param win: a pointer to the window structure
+ * @param seq_num: the sequence number of the window buffer entry to get
+ * @return: the index of the window buffer entry
+*/
 int getIndex(Window *win, int seq_num)
 {
         if(!argCheck(win)) return 0;
         return seq_num % win->capacity;
 }
 
+/**
+ * Determine whether the window is open.
+ * @param win: a pointer to the window structure
+ * @return: True if the window is open, False otherwise
+*/
 int windowOpen(Window *win)
 {
         if(!argCheck(win)) return 0;
@@ -178,11 +256,20 @@ int windowOpen(Window *win)
         return 0;
 }
 
+/**
+ * Determine whether the given window pointer is valid.
+ * @param win: a pointer to the window structure
+ * @return: the window pointer if valid, NULL otherwise
+*/
 Window *argCheck(Window *win)
 {
         return win;
 }
 
+/**
+ * Free the given window and its associated slots.
+ * @param win: a pointer to the window structure
+*/
 void freeWindow(Window *win)
 {
         int i;
