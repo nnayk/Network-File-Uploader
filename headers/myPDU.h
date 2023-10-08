@@ -12,4 +12,3 @@
 #define FLAG_SIZE 1
 
 int createPDU(uint8_t *, uint32_t, uint8_t, uint8_t *, int);
-void printPDU(uint8_t *,int);

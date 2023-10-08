@@ -1,7 +1,8 @@
 /* 
  * Nakul Nayak
  * CPE 453
- * Description: 
+ * Description:
+ This file contains the functions for working with the custom PDUs
  */
 
 /* header files */
@@ -21,6 +22,14 @@
 
 /* global vars, if any */
 
+/**
+ * Populate the given pduBuffer with the given data
+ * @param pduBuffer: the buffer to store the pdu in
+ * @param sequenceNumber: the pdu sequence number
+ * @param flag: the pdu flag
+ * @param payload: the message payload
+ * @param payloadLen: the length of the payload
+ */
 int createPDU(uint8_t * pduBuffer, uint32_t sequenceNumber, uint8_t flag, uint8_t * payload, int payloadLen)
 {
         int pduLength = payloadLen + HDR_LEN;
@@ -37,35 +46,4 @@ int createPDU(uint8_t * pduBuffer, uint32_t sequenceNumber, uint8_t flag, uint8_
         memcpy(pduBuffer + CRC_OFF,&checksum,2);
         
         return pduLength;
-}
-
-void printPDU(uint8_t *aPDU, int pduLength)
-{
-        if(DBUG) printf("pduLength = %d\n",pduLength);
-        if(in_cksum((unsigned short *)aPDU,pduLength))
-        {
-                fprintf(stderr,"%s\n","CHECKSUM MISMATCH");
-                return; /* bail if the checksum doesn't match */
-        }
-        
-
-        uint32_t raw_seq_num, host_seq_num;
-        uint8_t flag;
-        uint8_t *payload;
-        int payloadLength;
-        
-        memcpy(&raw_seq_num,aPDU,SEQ_NUM_SIZE);
-        host_seq_num = ntohl(raw_seq_num);
-
-        memcpy(&flag,aPDU+FLAG_OFF,FLAG_SIZE);
-
-        payload = aPDU + PAYLOAD_OFF;
-
-        /* will need to modify this for prog3, here the payload is guaranteed to be text so it's fine */
-        payloadLength = (int)strlen((const char *)payload) + 1; /* add +1 for the null byte since it's sent */ 
-
-        printf("Sequence number = %d\n",host_seq_num);
-        printf("Flag = %d\n",flag);
-        printf("Payload: %s\n",payload);
-        printf("Payload length: %d\n",payloadLength);
 }
