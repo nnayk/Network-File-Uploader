@@ -234,7 +234,6 @@ void talkToServer(int socketNum, struct sockaddr_in6 * server)
 	
 		pduLength = createPDU((uint8_t *)pduBuffer,counter,92,(uint8_t *)buffer,dataLen);
                 counter += 1;
-                printPDU((uint8_t *)pduBuffer,pduLength);
 
                 safeSendto(socketNum, pduBuffer, pduLength, 0, (struct sockaddr *) server, serverAddrLen);
 
