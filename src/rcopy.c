@@ -428,7 +428,6 @@ int sendData(int socket, uint8_t *pduBuffer,int pduLength,uint8_t *payload,int p
         return pduLength;
 }
 
-/*  */
 /**
  * Handle RR and SREJ messages from server. This function essentially carries out client side implementation of SREJ protocol.
  * @param socket: the socket number to use
@@ -471,7 +470,13 @@ int processServerMsg(int socket, Window *win, struct sockaddr_in6 *server, uint8
         return flag;
 }
 
-/* Appropriately respond to an RR from the server via SREJ protocol */
+/**
+ * Handle RR messages from server.
+ * @param socket: the socket number to use
+ * @param win: the window structure to use
+ * @param serverPDU: the pdu received from the server
+ * @param max_rr: the maximum RR number received from the server so far
+*/
 void handle_rr(int socket,Window * win,uint8_t *serverPDU,uint32_t *maxRR)
 {
         uint32_t net_rr_num;
@@ -484,16 +489,24 @@ void handle_rr(int socket,Window * win,uint8_t *serverPDU,uint32_t *maxRR)
 
         if(DBUG) printf("PRE RECVED RR = %d, lower = %d, offset = %d\n",host_rr_num,getLower(win),offset);
 
+        /* modify the max RR -- current message has the highest RR*/
         if(host_rr_num > *maxRR)
         {
                 *maxRR = host_rr_num;
         }
 
+        /* slide window if there's space */
         if(offset) slideWindow(win,offset);
         if(DBUG) printf("POST RECVED RR = %d, lower = %d, offset = %d\n",host_rr_num,getLower(win),offset);
 }
 
-/* Appropriately respond to an SREJ from the server via SREJ protocol */
+/**
+ * Appropriately respond to an SREJ from the server.
+ * @param socket: the socket number to use
+ * @param win: the window structure to use
+ * @param serverPDU: the pdu received from the server
+ * @param server: the server address
+*/
 void handle_srej(int socket,Window * win,uint8_t *serverPDU, struct sockaddr_in6 *server)
 {
         uint32_t net_srej_num = 0;
@@ -503,16 +516,24 @@ void handle_srej(int socket,Window * win,uint8_t *serverPDU, struct sockaddr_in6
         
         if(DBUG) printf("SREJ = %d\n",host_srej_num);
 
+        /* get the entry in the current window for the rejected packet */
         WBuff *entry = getEntry(win,host_srej_num);
 
+        /* resend the rejected packet */
         sendData(socket,entry->savedPDU,entry->pduLength,NULL,0,server,host_srej_num,F_DATA);
         if(DBUG) printf("SREJ: SENT %d bytes!, seq num = %d vs actual = %d\n",entry->pduLength,entry->seq_num,host_srej_num);
 }
 
-/* Since client has received EOF ACK from server, send the ACK to this EOF ACK -- this is the last packet sent from the client */
+/**
+ * Appropriately respond to an EOF ACK from server.
+ * @param socket: the socket number to use
+
+ * @param server: the server address
+*/
 void handle_eof_ack(int socket,struct sockaddr_in6 *server)
 {
         uint8_t pduBuffer[MAXBUF];
         uint8_t payloadBuffer[1];
+        /* send a final ack for the received EOF ack */
         sendData(socket,pduBuffer,-1,payloadBuffer,0,server,0,F_EOF_ACK_2);
 }
