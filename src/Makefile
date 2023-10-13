@@ -18,11 +18,11 @@ CFLAGS += -D__LIBCPE464_
 
 all: udpAll
 
-udpAll: rcopy server 
+udpAll: client server 
 tcpAll: myClient myServer
 
-rcopy: rcopy.c $(OBJS) 
-	$(CC) $(CFLAGS) -o  rcopy rcopy.c $(OBJS) $(LIBS)
+client: client.c $(OBJS) 
+	$(CC) $(CFLAGS) -o  client client.c $(OBJS) $(LIBS)
 
 server: server.c $(OBJS) 
 	$(CC) $(CFLAGS) -o server server.c  $(OBJS) $(LIBS)
